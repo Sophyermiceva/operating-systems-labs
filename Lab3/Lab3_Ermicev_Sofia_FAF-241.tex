@@ -1,0 +1,404 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 3}}\\[0.5cm]
+{\Large \textbf{The Command Line: Shell, Pipes and Text Filters}}\\[0.35cm]
+{\large Track A: The Real OS, from the Outside (Linux)}
+
+\vfill
+
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to develop practical skills in using the Bash command line and to understand how the shell interprets a command before executing a program. The work covers command discovery, PATH lookup, shell expansions, quoting, redirection, command chaining, background jobs, pipelines, text filters, and basic shell scripting.
+
+The experiments were performed in Ubuntu running under Windows Subsystem for Linux 2 (WSL2). A synthetic web access log containing 500 records was generated and used for the pipeline exercises.
+
+\begin{lstlisting}
+for i in $(seq 1 500); do
+  echo "2026-10-05 10:$(printf %02d $((i % 60))) user$((i % 7)) $([ $((i % 5)) -eq 0 ] && echo FAIL || echo OK) /page$((i % 4))"
+done > access.log
+\end{lstlisting}
+
+The verification command reported:
+\begin{lstlisting}
+500 access.log
+\end{lstlisting}
+
+\section{Part 1. Move Fast, Find Help}
+
+\subsection{Command types and PATH}
+The commands \texttt{type}, \texttt{which}, and inspection of the \texttt{PATH} variable were used to determine how Bash finds commands.
+
+\begin{lstlisting}
+type cd
+type ls
+type echo
+which ls
+echo $PATH
+echo $PATH | tr ':' '\n'
+nosuchprog
+echo "exit code: $?"
+\end{lstlisting}
+
+The observed output included:
+\begin{lstlisting}
+cd is a shell builtin
+ls is aliased to `ls --color=auto'
+echo is a shell builtin
+/usr/bin/ls
+...
+nosuchprog: command not found
+exit code: 127
+\end{lstlisting}
+
+There were \textbf{49 directories} in the current PATH. The external \texttt{ls} program was located at \texttt{/usr/bin/ls}.
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item \texttt{cd} and \texttt{echo} are shell built-ins. In this Bash configuration, \texttt{ls} is an alias that ultimately invokes the external program \texttt{/usr/bin/ls}. \texttt{cd} must be a built-in because changing directory must modify the working directory of the current shell process; a separate child process cannot change its parent's working directory.
+\item The PATH contained 49 directories. The \texttt{ls} executable was found in \texttt{/usr/bin}.
+\item A command that is not found returned exit code \textbf{127}.
+\item The \texttt{ls} option that sorts by modification time is \texttt{-t} (equivalently \texttt{--sort=time}); newer files are shown first by default.
+\end{enumerate}
+
+Tab completion expanded partial path names, for example \texttt{/usr/sh} to entries under \texttt{/usr/share/} and \texttt{/et} to \texttt{/etc/}. \texttt{Ctrl+R} started reverse incremental search through shell command history.
+
+\begin{lstlisting}[caption={Output of type, which and the missing-command exit code},label={fig:p1-type}]
+cd is a shell builtin
+ls is aliased to `ls --color=auto'
+echo is a shell builtin
+/usr/bin/ls
+nosuchprog: command not found
+exit code: 127
+\end{lstlisting}
+
+\section{Part 2. What the Shell Does to the Command Line}
+A test directory was prepared with several files:
+\begin{lstlisting}
+touch a.c b.c file1.txt file2.txt notes.txt "alfa beta.txt"
+\end{lstlisting}
+
+The shell expansions were then tested. The prediction column records the expected behavior before interpreting the observed result.
+
+\small
+\begin{tabularx}{\textwidth}{>{\ttfamily\raggedright\arraybackslash}p{0.23\textwidth} X X}
+\toprule
+\textbf{Command} & \textbf{Prediction} & \textbf{Real output / explanation} \\
+\midrule
+\texttt{echo *.c} & Names ending in \texttt{.c}. & \texttt{a.c b.c}. Bash expanded the glob before \texttt{echo} ran. \\
+\texttt{echo file?.txt} & Both numbered text files. & \texttt{file1.txt file2.txt}; \texttt{?} matched one character. \\
+\texttt{echo [a-b]*} & Names starting with a or b. & \texttt{a.c alfa beta.txt b.c}. The file containing a space was one filename even though \texttt{echo} printed the space normally. \\
+\texttt{echo *.xyz} & No matching files. & Literal \texttt{*.xyz}. With Bash's default settings an unmatched glob remains unchanged. \\
+\texttt{ls alfa beta.txt} & It will fail because the name contains a space. & Two separate names were passed to \texttt{ls}; both were missing. \\
+\texttt{ls "alfa beta.txt"} & The file will be found. & \texttt{'alfa beta.txt'}; quoting preserved the space as part of one argument. \\
+\texttt{echo '\$HOME' "\$HOME" \textbackslash\$HOME} & Literal, expanded, literal. & \texttt{\$HOME /home/sofia \$HOME}. \\
+\texttt{echo \{1..5\}} & Numbers 1 to 5. & \texttt{1 2 3 4 5}; brace expansion was performed by Bash. \\
+\texttt{echo \$((7 * 6))} & \texttt{42}. & \texttt{42}; arithmetic expansion. \\
+\texttt{echo "today is \$(date +\%A), I am \$(whoami)"} & Day and username substituted. & \texttt{today is Monday, I am sofia}; command substitution was evaluated inside double quotes. \\
+\texttt{touch log\{1..3\}.txt \&\& ls log*} & Three log files will be created and listed. & \texttt{log1.txt log2.txt log3.txt}. \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The predictions and results are summarized in the table above. The key point is that many transformations are performed by Bash before the selected program starts.
+\item \texttt{echo} did not search the filesystem. Bash performed pathname expansion (globbing) for \texttt{*.c} and passed the resulting filenames as arguments to \texttt{echo}.
+\item \texttt{ls alfa beta.txt} failed because Bash split the text at the space, producing two arguments. Two valid fixes are \texttt{ls "alfa beta.txt"} and \texttt{ls alfa\textbackslash\ beta.txt}.
+\item Single quotes preserve all enclosed characters literally. Double quotes preserve spaces but still allow expansions such as \texttt{\$HOME} and \texttt{\$(command)}. A backslash can escape an individual special character. \texttt{ls} may display a filename as \texttt{'alfa beta.txt'} to make the embedded space unambiguous to the reader.
+\end{enumerate}
+
+\begin{lstlisting}[caption={Globbing and quoting results},label={fig:p2-glob}]
+a.c b.c
+file1.txt file2.txt
+a.c alfa beta.txt b.c
+*.xyz
+ls: cannot access 'alfa': No such file or directory
+ls: cannot access 'beta.txt': No such file or directory
+'alfa beta.txt'
+$HOME /home/sofia $HOME
+1 2 3 4 5
+42
+today is Monday, I am sofia
+log1.txt  log2.txt  log3.txt
+\end{lstlisting}
+
+\section{Part 3. Redirection, Chaining and Jobs}
+
+Standard output and standard error were first redirected to different files:
+\begin{lstlisting}
+ls /etc /nope > out.txt 2> err.txt
+wc -l out.txt
+cat err.txt
+\end{lstlisting}
+
+The result was:
+\begin{lstlisting}
+184 out.txt
+ls: cannot access '/nope': No such file or directory
+\end{lstlisting}
+
+Therefore, the directory listing was written to \texttt{out.txt}, while the error message was written to \texttt{err.txt}.
+
+\subsection{Order of redirections}
+The two forms below are not equivalent:
+\begin{lstlisting}
+ls /etc /nope > all.txt 2>&1
+ls /etc /nope 2>&1 > all.txt
+\end{lstlisting}
+
+In the first form, stdout is redirected to the file and stderr is then made a duplicate of the already redirected stdout; therefore both streams go to the file. In the second form, stderr is first duplicated from the current stdout (the terminal), and only afterwards stdout is redirected to the file. Consequently, the error still appears on the terminal.
+
+\subsection{Input redirection and command operators}
+The command \texttt{wc -l < access.log} produced only:
+\begin{lstlisting}
+500
+\end{lstlisting}
+whereas \texttt{wc -l access.log} produced:
+\begin{lstlisting}
+500 access.log
+\end{lstlisting}
+The reason is that with input redirection \texttt{wc} receives data through standard input and is not given a filename argument to print.
+
+The shell operators used in this part have the following meanings:
+\begin{itemize}
+\item \texttt{;} executes the next command regardless of the previous command's exit status.
+\item \texttt{\&\&} executes the next command only if the previous command succeeds (exit status 0).
+\item \texttt{||} executes the next command only if the previous command fails (non-zero exit status).
+\end{itemize}
+
+Error suppression and conditional execution produced:
+\begin{lstlisting}
+failed with code 2
+\end{lstlisting}
+
+A background job was created with \texttt{sleep 100 \&}. Bash reported a job number and PID, and \texttt{kill \%1} terminated it.
+
+\begin{lstlisting}[caption={Background job and termination},label={fig:p3-job}]
+[1] 2384
+[1]+  Running                 sleep 100 &
+[1]+  Terminated              sleep 100
+\end{lstlisting}
+
+\section{Part 4. Answering Questions with One-Liners}
+The file \texttt{access.log} contained 500 lines with fields: date, time, user, result, and page. The following results were obtained.
+
+\subsection{Q1. How many requests failed?}
+\begin{lstlisting}
+grep -c FAIL access.log
+\end{lstlisting}
+Result: \textbf{100} failed requests.
+
+\subsection{Q2. How many different pages were requested, and which?}
+\begin{lstlisting}
+cut -d' ' -f5 access.log | sort -u
+\end{lstlisting}
+The pages were \texttt{/page0}, \texttt{/page1}, \texttt{/page2}, and \texttt{/page3}; therefore there were \textbf{4} distinct pages.
+
+\subsection{Q3. How many requests did each page get?}
+\begin{lstlisting}
+cut -d' ' -f5 access.log | sort | uniq -c | sort -rn
+\end{lstlisting}
+\begin{lstlisting}
+125 /page3
+125 /page2
+125 /page1
+125 /page0
+\end{lstlisting}
+The counts sum to 500, matching the total number of log entries.
+
+\subsection{Q4. Which user or users have the most failed requests, and how many?}
+\begin{lstlisting}
+grep FAIL access.log | cut -d' ' -f3 | sort | uniq -c | sort -rn
+\end{lstlisting}
+The maximum was shared by \textbf{user3} and \textbf{user5}, with \textbf{15 failures each}. The remaining users each had 14 failures.
+
+\subsection{Q5. How many requests did user3 make, and how many failed?}
+\begin{lstlisting}
+grep -c ' user3 ' access.log
+grep ' user3 ' access.log | grep -c FAIL
+\end{lstlisting}
+\texttt{user3} made \textbf{72 requests}, of which \textbf{15 failed}.
+
+\subsection{Q6. Last three failed requests, time and user only}
+\begin{lstlisting}
+grep FAIL access.log | tail -3 | cut -d' ' -f2,3
+\end{lstlisting}
+\begin{lstlisting}
+10:10 user0
+10:15 user5
+10:20 user3
+\end{lstlisting}
+
+\subsection{Q7. Login shells in /etc/passwd}
+\begin{lstlisting}
+cut -d: -f7 /etc/passwd | sort | uniq -c | sort -rn
+\end{lstlisting}
+\begin{lstlisting}
+26 /usr/sbin/nologin
+ 2 /bin/bash
+ 1 /bin/sync
+ 1 /bin/false
+\end{lstlisting}
+
+\subsection{Q8. Why do the two ls pipelines differ by one?}
+The commands produced:
+\begin{lstlisting}
+ls /etc | wc -l
+183
+ls -l /etc | wc -l
+184
+\end{lstlisting}
+The long listing begins with an additional \texttt{total ...} line that summarizes allocated blocks. \texttt{wc -l} counts this line too, hence the difference of exactly one.
+
+\subsection{Bonus}
+The regular expression selecting failed requests whose minute ends in zero found \textbf{50 lines}:
+\begin{lstlisting}
+grep -Ec '10:[0-9]0 .* FAIL' access.log
+50
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Main results from oneliners.sh},label={fig:p4-run}]
+100
+/page0
+/page1
+/page2
+/page3
+Count: 4
+125 /page3
+125 /page2
+125 /page1
+125 /page0
+15 user5
+15 user3
+Total: 72
+Failed: 15
+10:10 user0
+10:15 user5
+10:20 user3
+\end{lstlisting}
+
+\section{Part 5. First Shell Script}
+The script \texttt{report.sh} was created to summarize a supplied log file and to handle a missing input file correctly.
+
+\begin{lstlisting}
+#!/bin/bash
+# usage: ./report.sh access.log
+
+log=$1
+
+if [ ! -f "$log" ]; then
+  echo "no such file: $log" >&2
+  exit 1
+fi
+
+total=$(wc -l < "$log")
+fails=$(grep -c FAIL "$log")
+
+echo "$total requests, $fails failed"
+
+for i in {0..6}; do
+  count=$(grep " user$i " "$log" | grep -c FAIL)
+  echo "user$i: $count failures"
+done
+\end{lstlisting}
+
+After \texttt{chmod +x report.sh}, execution on the generated log produced:
+\begin{lstlisting}
+500 requests, 100 failed
+user0: 14 failures
+user1: 14 failures
+user2: 14 failures
+user3: 15 failures
+user4: 14 failures
+user5: 15 failures
+user6: 14 failures
+\end{lstlisting}
+
+Running it with a missing file produced:
+\begin{lstlisting}
+no such file: nope.log
+exit code: 1
+\end{lstlisting}
+
+The final permissions were:
+\begin{lstlisting}
+-rwxr-xr-x 1 sofia sofia 323 Oct 5 16:15 report.sh
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The first line, \texttt{\#!/bin/bash}, is the shebang. When the file is executed directly, it tells the operating system to use Bash as the interpreter. Before execute permission is granted with \texttt{chmod +x}, attempting \texttt{./report.sh} normally results in a permission error.
+\item \texttt{./report.sh} is required because the current directory (\texttt{.}) is normally not part of PATH. The explicit \texttt{./} tells the shell where the executable file is located.
+\item \texttt{>\&2} sends the diagnostic message to standard error rather than standard output. \texttt{exit 1} returns a non-zero status so callers and scripts can detect that execution failed.
+\end{enumerate}
+
+\section{Conclusion}
+This laboratory work demonstrated that the shell is not merely a program launcher. Before execution, Bash performs command lookup, pathname expansion, quote processing, arithmetic expansion, command substitution, and redirection setup. The experiments also showed how small UNIX text-processing programs can be combined through pipelines to answer practical questions about structured text data.
+
+The log-analysis exercises reinforced the use of \texttt{grep}, \texttt{cut}, \texttt{sort}, \texttt{uniq}, \texttt{wc}, \texttt{head}, and \texttt{tail}. Finally, the \texttt{report.sh} script combined these command-line techniques with variables, conditionals, loops, stderr handling, exit codes, and executable permissions to form a small reusable Bash program.
+
+\end{document}
