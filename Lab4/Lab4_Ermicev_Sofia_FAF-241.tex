@@ -1,0 +1,357 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 4}}\\[0.5cm]
+{\Large \textbf{The xv6 Shell from the Outside}}\\[0.35cm]
+{\large Track B: Build Your Own Small OS (xv6)}
+
+\vfill
+
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to investigate the xv6 command shell from the user's point of view and compare its behavior with Bash on Linux. The work demonstrates which command-line features are implemented by a small educational shell and which conveniences are added by a modern shell such as Bash.
+
+The laboratory also examines how command-line arguments are constructed before a program starts. A small \texttt{args} program was implemented for both xv6 and Linux to show the contents of \texttt{argc} and \texttt{argv}. Finally, the source code of \texttt{user/sh.c} was inspected to connect the observed behavior with the internal command types implemented by xv6.
+
+The experiments were performed in Ubuntu under WSL2 and in the current MIT xv6-riscv tree.
+
+\section{Part 1. Fixing and Testing sleep}
+
+\subsection{System call used by the current xv6 tree}
+The current user API was inspected with:
+\begin{lstlisting}
+grep -n "pause\|sleep" user/user.h
+\end{lstlisting}
+
+The result was:
+\begin{lstlisting}[caption={The current xv6 user API},label={fig:p1-api}]
+25:int pause(int);
+\end{lstlisting}
+
+Therefore, this xv6 version uses \texttt{pause(int)} instead of the older \texttt{sleep(int)} system call.
+
+The implemented \texttt{user/sleep.c} was:
+\begin{lstlisting}[caption={sleep.c adapted to the current xv6 API},label={fig:p1-sleepc}]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(int argc, char *argv[])
+{
+  if(argc != 2){
+    fprintf(2, "usage: sleep <ticks>\n");
+    exit(1);
+  }
+
+  pause(atoi(argv[1]));
+  exit(0);
+}
+\end{lstlisting}
+
+The Makefile contained the program in \texttt{UPROGS}:
+\begin{lstlisting}
+$U/_sleep\
+\end{lstlisting}
+
+After running \texttt{make qemu}, xv6 booted successfully and the program was tested:
+\begin{lstlisting}[caption={Testing sleep in xv6},label={fig:p1-run}]
+$ sleep 20
+$ sleep
+usage: sleep <ticks>
+\end{lstlisting}
+
+\subsection{Observation}
+The program waits for the requested number of ticks when exactly one argument is supplied. If the argument is missing, it prints a usage message and exits with an error. The change from \texttt{sleep()} to \texttt{pause()} is an API change in the current xv6 tree; the user program itself still presents the command name \texttt{sleep}.
+
+\section{Part 2. Bash versus the xv6 Shell}
+
+The same command-line features were tested in Bash and in the xv6 shell. A Linux test directory contained a file named \texttt{README}. The xv6 root directory already contained its own \texttt{README} and user programs.
+
+\small
+\begin{tabularx}{\textwidth}{>{\ttfamily\raggedright\arraybackslash}p{0.25\textwidth} X X}
+\toprule
+\textbf{Command / feature} & \textbf{Bash} & \textbf{xv6 shell} \\
+\midrule
+\texttt{echo hello > f ; cat < f} & Printed \texttt{hello}; redirection and sequencing worked. & Printed \texttt{hello}; redirection and sequencing worked. \\
+\texttt{ls | grep READ} & Printed \texttt{README}. & Printed the xv6 \texttt{README} entry. \\
+\texttt{(echo a; echo b) | wc} & Printed \texttt{2 2 4}. & Printed \texttt{2 2 4}. \\
+\texttt{echo one ; echo two} & Printed \texttt{one} and \texttt{two}. & Printed \texttt{one} and \texttt{two}. \\
+\texttt{echo bg \&} & Ran in background and Bash displayed a job number/PID. & Ran in background, but without Bash job-control information. \\
+\texttt{ls *} & Bash expanded \texttt{*} to filenames before running \texttt{ls}. & Failed with \texttt{ls: cannot open *}; the \texttt{*} remained literal. \\
+\texttt{echo \$HOME} & Printed \texttt{/home/sofia}. & Printed literal \texttt{\$HOME}. \\
+\texttt{echo "a b"} & Printed \texttt{a b}; quotes were removed by the shell. & Printed \texttt{"a b"}; quotes were not interpreted as Bash quoting syntax. \\
+\texttt{cd d} followed by \texttt{ls} & \texttt{ls} remains available through PATH. & \texttt{ls} failed because xv6 does not search PATH. \texttt{../ls} worked. \\
+History / completion & Arrow-up, Tab completion and Ctrl+R are available. & No Bash-style history search or tab completion is implemented. \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\subsection{Selected Bash output}
+\begin{lstlisting}[caption={Selected results in Bash},label={fig:p2-bash}]
+hello
+README
+      2       2       4
+one
+two
+[1] 2558
+bg
+README  f
+/home/sofia
+a b
+README  d  f
+\end{lstlisting}
+
+\subsection{Selected xv6 output}
+\begin{lstlisting}[caption={Selected results in the xv6 shell},label={fig:p2-xv6}]
+$ echo hello > f ; cat < f
+hello
+$ ls | grep READ
+README         2 2 2441
+$ (echo a; echo b) | wc
+2 2 4
+$ echo one ; echo two
+one
+two
+$ echo bg &
+bg
+$ ls *
+ls: cannot open *
+$ echo $HOME
+$HOME
+$ echo "a b"
+"a b"
+\end{lstlisting}
+
+After changing to directory \texttt{d}, an ordinary \texttt{ls} could no longer be executed:
+\begin{lstlisting}[caption={Running a program after changing directory in xv6},label={fig:p2-path}]
+$ cd d
+$ ls
+exec ls failed
+$ ../ls
+.              1 1 1024
+..             1 1 1024
+README         2 2 2441
+...
+ls             2 11 41520
+...
+d              1 26 32
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item Both shells support execution of programs, input/output redirection, pipes, command lists/sequences, grouping with parentheses, and background execution. Bash additionally provides pathname expansion (globbing), environment-variable expansion, quote processing, PATH lookup, interactive history, reverse history search, completion, and richer job control.
+\item In xv6, \texttt{ls} stops working after \texttt{cd d} because the shell does not search directories listed in a PATH variable. The xv6 user programs are files in the parent/root directory, so from inside \texttt{d} the program can be executed explicitly as \texttt{../ls}.
+\item For daily work, PATH lookup and command history/completion are among the most useful missing conveniences. Of the missing features, a simple PATH search would be comparatively straightforward to add because the shell could try a small list of directories before reporting \texttt{exec} failure; full quoting and expansion semantics would require a more substantial parser.
+\end{enumerate}
+
+\section{Part 3. Who Expands *? Inspecting argc and argv}
+
+\subsection{xv6 version of args}
+A small xv6 program was created to print every argument it receives:
+\begin{lstlisting}[caption={user/args.c},label={fig:p3-argsc}]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(int argc, char *argv[])
+{
+    printf("argc = %d\n", argc);
+    for(int i = 0; i < argc; i++){
+        printf("argv[%d] = [%s]\n", i, argv[i]);
+    }
+    exit(0);
+}
+\end{lstlisting}
+
+It was added to \texttt{UPROGS}:
+\begin{lstlisting}
+$U/_sleep\
+$U/_args\
+$U/_forktest\
+\end{lstlisting}
+
+A matching Linux program, \texttt{args\_linux.c}, used \texttt{stdio.h} and returned 0 from \texttt{main}. It was compiled using:
+\begin{lstlisting}
+gcc args_linux.c -o args
+\end{lstlisting}
+
+\subsection{Results in Bash}
+The Linux test directory contained \texttt{args\_linux.c}, \texttt{one.c}, and \texttt{two.c}. The observed output was:
+\begin{lstlisting}[caption={argv produced through Bash},label={fig:p3-bash}]
+$ ./args one two three
+argc = 4
+argv[0] = [./args]
+argv[1] = [one]
+argv[2] = [two]
+argv[3] = [three]
+
+$ ./args *.c "x y"
+argc = 5
+argv[0] = [./args]
+argv[1] = [args_linux.c]
+argv[2] = [one.c]
+argv[3] = [two.c]
+argv[4] = [x y]
+
+$ ./args $HOME
+argc = 2
+argv[1] = [/home/sofia]
+
+$ ./args 'single quoted'
+argc = 2
+argv[1] = [single quoted]
+\end{lstlisting}
+
+\subsection{Results in xv6}
+The same tests in xv6 produced:
+\begin{lstlisting}[caption={argv produced through the xv6 shell},label={fig:p3-xv6}]
+$ args one two three
+argc = 4
+argv[0] = [args]
+argv[1] = [one]
+argv[2] = [two]
+argv[3] = [three]
+
+$ args *.c "x y"
+argc = 4
+argv[0] = [args]
+argv[1] = [*.c]
+argv[2] = ["x]
+argv[3] = [y"]
+
+$ args $HOME
+argc = 2
+argv[0] = [args]
+argv[1] = [$HOME]
+\end{lstlisting}
+
+The single-quote experiment likewise showed that xv6 does not implement Bash-style quote processing: quote characters are treated as ordinary characters and whitespace still separates words.
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item For \texttt{*.c "x y"}, the Linux program received \textbf{5 arguments in total}: the program name, three filenames produced by glob expansion, and one argument \texttt{x y}. In xv6, the program received \textbf{4 arguments in total}: the program name, literal \texttt{*.c}, \texttt{"x}, and \texttt{y"}.
+\item The program itself and the kernel do not perform the expansions demonstrated here. The \textbf{shell} processes the command line before calling \texttt{exec}. Bash expands \texttt{*.c}, substitutes variables, removes syntactic quotes, and constructs the final argument vector. The xv6 shell implements far fewer transformations, so the program receives the special characters literally.
+\item Extra spaces in \texttt{one      two      three} do not create empty arguments. Both shells tokenize on whitespace and pass the three words as three arguments, giving \texttt{argc = 4} including the program name.
+\end{enumerate}
+
+\section{Part 4. Reading the xv6 Shell Source}
+
+The shell implementation was inspected directly in \texttt{user/sh.c}.
+
+\begin{lstlisting}
+wc -l user/sh.c
+grep -n "#define" user/sh.c
+grep -n "case " user/sh.c
+grep -n "cd" user/sh.c | head
+\end{lstlisting}
+
+The file contained \textbf{499 lines}. The command kinds were defined as:
+\begin{lstlisting}[caption={Command kinds defined in user/sh.c},label={fig:p4-types}]
+8:#define EXEC  1
+9:#define REDIR 2
+10:#define PIPE  3
+11:#define LIST  4
+12:#define BACK  5
+14:#define MAXARGS 10
+\end{lstlisting}
+
+The execution switch contained corresponding cases at lines 75, 83, 93, 101 and 125:
+\begin{lstlisting}[caption={Where the command kinds are executed},label={fig:p4-cases}]
+75:  case EXEC:
+83:  case REDIR:
+93:  case LIST:
+101:  case PIPE:
+125:  case BACK:
+\end{lstlisting}
+
+The source also showed \texttt{cd} handling near line 170:
+\begin{lstlisting}[caption={Location of cd handling},label={fig:p4-cd}]
+170:        fprintf(2, "cannot cd %s\n", cmd + 3);
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The five command kinds are:
+  \begin{itemize}
+  \item \texttt{EXEC} -- a normal command with no special operator;
+  \item \texttt{REDIR} -- produced by input/output redirection operators such as \texttt{<}, \texttt{>} and \texttt{>>};
+  \item \texttt{PIPE} -- produced by \texttt{|};
+  \item \texttt{LIST} -- produced by \texttt{;};
+  \item \texttt{BACK} -- produced by \texttt{\&}.
+  \end{itemize}
+Parentheses are parsed to group a subcommand, but they do not introduce a sixth command kind.
+\item \texttt{cd} is handled specially by the shell's main loop rather than being executed as a normal child program. It must modify the current shell process's working directory. If \texttt{cd} were executed only in a forked child, the parent shell would remain in its original directory after the child exited.
+\item No shell-expansion implementation for Bash-style \texttt{*} globbing or \texttt{\$} variable substitution is present in \texttt{sh.c}. Occurrences of \texttt{*} found by a simple grep are primarily C pointer syntax, not wildcard handling. This explains why \texttt{ls *} passes a literal asterisk and why \texttt{echo \$HOME} prints the variable name unchanged in Part 2.
+\end{enumerate}
+
+\section{Conclusion}
+This laboratory work demonstrated that even the small xv6 shell implements the essential mechanisms of a Unix command interpreter: program execution, redirection, pipes, command lists, grouped commands, background execution, and a built-in \texttt{cd} operation.
+
+The comparison with Bash showed that many features commonly associated with ``running a command'' are actually services provided by the shell before the target program starts. Bash performs wildcard expansion, variable substitution, quote processing, PATH lookup, history and completion, while xv6 intentionally omits these conveniences.
+
+The \texttt{args} experiments made this separation especially clear. Programs receive an already constructed \texttt{argv}; in Bash, the shell transforms \texttt{*.c}, variables and quoted text before \texttt{exec}, whereas the xv6 shell passes most of these characters literally. Reading \texttt{user/sh.c} connected these external observations with its five internal command types and showed how a compact shell can provide the core Unix command-line model in about 500 lines of C code.
+
+\end{document}
