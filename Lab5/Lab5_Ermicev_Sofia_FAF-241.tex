@@ -1,0 +1,362 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 5}}\\[0.5cm]
+{\Large \textbf{The File System with Your Own Hands}}\\[0.35cm]
+{\large Track A: Warm-up on Linux}
+
+\vfill
+
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to explore the Linux file system directly through command-line experiments. The work focuses on the directory tree and file types, inodes, hard and symbolic links, permissions, special permission bits, disk usage, and the information exposed by the kernel through the \texttt{/proc} pseudo-filesystem.
+
+All experiments were performed as the normal user \texttt{sofia} in Ubuntu under WSL2. The working directory was \texttt{\~/os-lab5}. No root privileges were used for the permission experiments.
+
+\section{Part 1. The Tree and File Types}
+
+The user and working environment were verified first:
+\begin{lstlisting}
+$ whoami
+sofia
+\end{lstlisting}
+
+The root directory and several representative paths were inspected:
+\begin{lstlisting}
+$ ls -ld /etc /etc/passwd /bin /dev/null /tmp
+lrwxrwxrwx  1 root root     7 Apr 22  2024 /bin -> usr/bin
+crw-rw-rw-  1 root root  1, 3 Oct  9 02:09 /dev/null
+drwxr-xr-x 98 root root  4096 Oct 12 15:40 /etc
+-rw-r--r--  1 root root  1545 May  2  2025 /etc/passwd
+drwxrwxrwt 13 root root 12288 Oct 12 15:35 /tmp
+\end{lstlisting}
+
+The \texttt{file} command confirmed the object types:
+\begin{lstlisting}
+$ file /usr/bin/ls /etc/passwd /bin
+/usr/bin/ls: ELF 64-bit LSB pie executable, x86-64, ...
+/etc/passwd: ASCII text
+/bin:        symbolic link to usr/bin
+\end{lstlisting}
+
+Disk usage of two system directories was compared:
+\begin{lstlisting}
+$ du -sh /var/log 2>/dev/null
+392M    /var/log
+$ du -sh /usr 2>/dev/null
+7.4G    /usr
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The first character of \texttt{ls -l} identifies the file type. \texttt{/etc} is a directory (\texttt{d}), \texttt{/etc/passwd} is a regular file (\texttt{-}), \texttt{/bin} is a symbolic link (\texttt{l}), \texttt{/dev/null} is a character device (\texttt{c}), and \texttt{/tmp} is a directory (\texttt{d}).
+\item On this system, \texttt{/bin} is not a separate directory. It is a symbolic link to \texttt{usr/bin}.
+\item One character device is \texttt{/dev/null}. A block device visible in the system is \texttt{/dev/sdc}, which later appears in \texttt{lsblk} as the disk containing the root filesystem.
+\item \texttt{/usr} is much larger than \texttt{/var/log}: approximately 7.4 GB versus 392 MB, or roughly nineteen times larger.
+\end{enumerate}
+
+\section{Part 2. Inodes and Links}
+
+\subsection{Inode of a regular file}
+A small file was created and inspected with \texttt{stat} and \texttt{ls -li}:
+\begin{lstlisting}
+$ echo hello > notes.txt
+$ stat notes.txt
+File: notes.txt
+Size: 6               Blocks: 8          IO Block: 4096   regular file
+Device: 8,32    Inode: 44076       Links: 1
+Access: (0644/-rw-r--r--)  Uid: (1000/sofia)  Gid: (1000/sofia)
+
+$ ls -li notes.txt
+44076 -rw-r--r-- 1 sofia sofia 6 Oct 12 15:42 notes.txt
+\end{lstlisting}
+
+The inode number was \textbf{44076}, and the initial link count was \textbf{1}.
+
+\subsection{Hard link}
+A hard link was created:
+\begin{lstlisting}
+$ ln notes.txt hard.txt
+$ ls -li notes.txt hard.txt
+44076 -rw-r--r-- 2 sofia sofia 6 Oct 12 15:42 hard.txt
+44076 -rw-r--r-- 2 sofia sofia 6 Oct 12 15:42 notes.txt
+\end{lstlisting}
+
+Both names refer to the same inode, and the link count became 2. After removing the original name, the data was still accessible:
+\begin{lstlisting}
+$ rm notes.txt
+$ cat hard.txt
+hello
+$ ls -li hard.txt
+44076 -rw-r--r-- 1 sofia sofia 6 Oct 12 15:42 hard.txt
+\end{lstlisting}
+
+\subsection{Symbolic link}
+A symbolic link was then created:
+\begin{lstlisting}
+$ ln -s hard.txt soft.txt
+$ ls -li hard.txt soft.txt
+44076 -rw-r--r-- 1 sofia sofia 6 Oct 12 15:42 hard.txt
+44078 lrwxrwxrwx 1 sofia sofia 8 Oct 12 15:43 soft.txt -> hard.txt
+$ cat soft.txt
+hello
+\end{lstlisting}
+
+After deleting the target, the symbolic link remained but could no longer be followed:
+\begin{lstlisting}
+$ rm hard.txt
+$ cat soft.txt
+cat: soft.txt: No such file or directory
+$ ls -l soft.txt
+lrwxrwxrwx 1 sofia sofia 8 Oct 12 15:43 soft.txt -> hard.txt
+\end{lstlisting}
+
+\subsection{Directory link counts}
+\begin{lstlisting}
+$ mkdir d
+$ ls -ld d
+drwxr-xr-x 2 sofia sofia 4096 Oct 12 15:43 d
+
+$ mkdir d/x d/y
+$ ls -ld d
+drwxr-xr-x 4 sofia sofia 4096 Oct 12 15:43 d
+\end{lstlisting}
+
+\subsection{Logical size versus allocated space}
+\begin{lstlisting}
+$ echo x > one.txt
+$ ls -l one.txt
+-rw-r--r-- 1 sofia sofia 2 Oct 12 15:43 one.txt
+$ du -h one.txt
+4.0K    one.txt
+
+$ truncate -s 1G big.img
+$ ls -lh big.img
+-rw-r--r-- 1 sofia sofia 1.0G Oct 12 15:43 big.img
+$ du -h big.img
+0       big.img
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item In \texttt{stat}, \texttt{Inode: 44076} is the inode number, while \texttt{Links: 1} is the number of directory entries (hard links) referring to that inode.
+\item Removing \texttt{notes.txt} did not remove the data because \texttt{hard.txt} still referred to the same inode. Therefore, \texttt{rm} removes a directory entry (a name); file data is released only when no hard links and no open references remain.
+\item \texttt{soft.txt} is a separate inode containing the pathname \texttt{hard.txt}. When the target was removed, the symbolic link became broken. Its size is 8 bytes because the stored target string \texttt{hard.txt} contains eight characters.
+\item A new directory has link count 2: one entry from its parent and its own \texttt{.} entry. Each subdirectory adds one more reference to the parent through its \texttt{..} entry, so adding \texttt{x} and \texttt{y} increased the count to 4.
+\item The 2-byte file occupies 4.0K because disk space is allocated in filesystem blocks. The 1 GB file created with \texttt{truncate} occupied 0 blocks because it was a sparse file: its logical size was large, but no data blocks had yet been written.
+\end{enumerate}
+
+\section{Part 3. Permissions}
+
+\subsection{File permissions}
+\begin{lstlisting}
+$ echo secret > s.txt
+$ chmod 600 s.txt
+$ ls -l s.txt
+-rw------- 1 sofia sofia 7 Oct 12 15:47 s.txt
+
+$ chmod 000 s.txt
+$ cat s.txt
+cat: s.txt: Permission denied
+
+$ chmod u+r s.txt
+$ cat s.txt
+secret
+\end{lstlisting}
+
+The current umask and permissions of newly created objects were:
+\begin{lstlisting}
+$ umask
+0022
+$ touch new.txt
+$ mkdir newdir
+$ ls -ld new.txt newdir
+-rw-r--r-- 1 sofia sofia    0 Oct 12 15:53 new.txt
+drwxr-xr-x 2 sofia sofia 4096 Oct 12 15:53 newdir
+\end{lstlisting}
+
+\subsection{Directory permissions}
+A directory was tested with read-only and execute-only permissions for the owner:
+\begin{lstlisting}
+$ mkdir box
+$ echo hi > box/f
+$ chmod u=r,go= box
+$ ls box
+ls: cannot access 'box/f': Permission denied
+f
+$ cat box/f
+cat: box/f: Permission denied
+\end{lstlisting}
+
+With execute permission only:
+\begin{lstlisting}
+$ chmod u=x,go= box
+$ ls box
+ls: cannot open directory 'box': Permission denied
+$ cat box/f
+hi
+\end{lstlisting}
+
+This shows that read permission on a directory allows listing its entry names, while execute permission allows pathname traversal and access to a known entry.
+
+\subsection{Special permission bits}
+\begin{lstlisting}
+$ ls -l /usr/bin/passwd
+-rwsr-xr-x 1 root root 64152 May 30 2024 /usr/bin/passwd
+
+$ ls -ld /tmp
+drwxrwxrwt 13 root root 12288 Oct 12 15:35 /tmp
+
+$ cat /etc/shadow
+cat: /etc/shadow: Permission denied
+
+$ ls -l /etc/shadow
+-rw-r----- 1 root shadow 841 May 2 2025 /etc/shadow
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item Common numeric modes are:
+\begin{itemize}
+\item \texttt{600 = rw-------}: private file readable and writable only by its owner, for example a sensitive configuration file.
+\item \texttt{644 = rw-r--r--}: owner may edit; everyone may read, common for ordinary text files.
+\item \texttt{755 = rwxr-xr-x}: owner may modify and execute; others may read and execute, common for programs and public directories.
+\item \texttt{700 = rwx------}: private directory or executable accessible only by its owner.
+\end{itemize}
+\item Ownership does not automatically bypass permission bits. With mode \texttt{000}, the owner is still subject to the file's access mode and therefore cannot read it as a normal user.
+\item The umask was \texttt{0022}. New regular files start from a maximum of \texttt{666}; removing the masked bits gives \texttt{644}. New directories start from \texttt{777}; applying the same mask gives \texttt{755}.
+\item For directories, \texttt{r} permits reading the directory entries (listing names), whereas \texttt{x} permits traversal/search of the directory and access to a known pathname inside it.
+\item The \texttt{s} in \texttt{/usr/bin/passwd} is the set-user-ID bit. It allows the program to run with the effective user ID of its owner (root), which is necessary for controlled updates to protected password data. The \texttt{t} in \texttt{/tmp} is the sticky bit; it prevents users from deleting or renaming files owned by other users in this shared writable directory.
+\end{enumerate}
+
+\section{Part 4. Disks and the Kernel as Files}
+
+The block devices were inspected with \texttt{lsblk}:
+\begin{lstlisting}
+NAME MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+sda    8:0    0 388.4M  1 disk
+sdb    8:16   0     4G  0 disk [SWAP]
+sdc    8:32   0     1T  0 disk /mnt/wslg/distro
+                               /
+\end{lstlisting}
+
+The root filesystem usage was:
+\begin{lstlisting}
+$ df -h
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdc       1007G   22G  934G   3% /
+\end{lstlisting}
+
+Its filesystem type was identified through the mount table:
+\begin{lstlisting}
+$ mount | grep " / "
+/dev/sdc on / type ext4 (rw,relatime,discard,errors=remount-ro,data=ordered)
+\end{lstlisting}
+
+CPU and memory information were read from \texttt{/proc}:
+\begin{lstlisting}
+$ grep -c processor /proc/cpuinfo
+16
+
+$ head -3 /proc/meminfo
+MemTotal:       14186832 kB
+MemFree:        13273344 kB
+MemAvailable:   13354732 kB
+\end{lstlisting}
+
+The status of the process reading \texttt{/proc/self/status} was:
+\begin{lstlisting}
+$ head -5 /proc/self/status
+Name:   head
+Umask:  0022
+State:  R (running)
+Tgid:   69035
+Ngid:   0
+\end{lstlisting}
+
+Open file descriptors were also visible as symbolic links:
+\begin{lstlisting}
+$ ls -l /proc/self/fd
+total 0
+lrwx------ 1 sofia sofia 64 Oct 12 15:54 0 -> /dev/pts/2
+lrwx------ 1 sofia sofia 64 Oct 12 15:54 1 -> /dev/pts/2
+lrwx------ 1 sofia sofia 64 Oct 12 15:54 2 -> /dev/pts/2
+lr-x------ 1 sofia sofia 64 Oct 12 15:54 3 -> /proc/68897/fd
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The WSL2 Linux root filesystem is on the block device \texttt{/dev/sdc}. It is mounted at \texttt{/} using the \texttt{ext4} filesystem. The system also exposes \texttt{/dev/sdb} as 4 GB of swap.
+\item The root filesystem has a size of approximately 1007 GB, with about 22 GB used and 934 GB available. It was approximately 3\% full at the time of the experiment.
+\item According to \texttt{/proc/cpuinfo}, the environment exposes 16 logical processors. \texttt{/proc/meminfo} reports 14,186,832 kB of RAM, approximately 13.5 GiB.
+\item \texttt{/proc/self/status} showed the process name \texttt{head}. The special \texttt{/proc/self} path refers to the process that is currently accessing it; in the command \texttt{head -5 /proc/self/status}, that process is \texttt{head} itself.
+\end{enumerate}
+
+\section{Conclusion}
+This laboratory work demonstrated the main Linux file-system concepts directly through observation. File names were shown to be directory entries that refer to inodes, while hard links create additional names for the same inode and symbolic links store a pathname to another object. The experiments also demonstrated that logical file size and allocated disk space are different concepts, especially for sparse files.
+
+The permission experiments showed how read, write, and execute bits behave differently for files and directories, how \texttt{umask} influences newly created objects, and why setuid and sticky bits are necessary for common system facilities such as \texttt{passwd} and \texttt{/tmp}. Finally, the disk and \texttt{/proc} experiments connected the filesystem view with storage devices, CPU and memory information, processes, and open file descriptors. Overall, the work showed how Linux exposes both persistent storage and many kernel-managed resources through a unified file-oriented interface.
+
+\end{document}
