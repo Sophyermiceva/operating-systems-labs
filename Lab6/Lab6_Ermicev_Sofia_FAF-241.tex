@@ -1,0 +1,370 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 6}}\\[0.5cm]
+{\Large \textbf{Inside the xv6 File System}}\\[0.35cm]
+{\large Track B: Build Your Own Small OS (xv6)}
+
+\vfill
+
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to examine the internal organization of the xv6 file system and connect the concepts of directories, inodes, hard links, block addressing, and file-system limits with the actual xv6 source code. The work also includes two user programs: \texttt{mystat}, which displays inode metadata, and \texttt{find}, which recursively traverses the directory tree.
+
+All experiments were performed in the existing \texttt{\~/xv6-riscv} tree. New user programs were added to the \texttt{user/} directory and registered in the \texttt{UPROGS} list in the Makefile.
+
+\section{Part 1. Reading What xv6 Shows}
+
+The file types were first decoded from \texttt{kernel/stat.h}:
+\begin{lstlisting}
+$ grep -n "T_DIR\|T_FILE\|T_DEVICE" kernel/stat.h
+1:#define T_DIR    1 // Directory
+2:#define T_FILE   2 // File
+3:#define T_DEVICE 3 // Device
+\end{lstlisting}
+
+The root directory was listed in xv6. The beginning of the output was:
+\begin{lstlisting}
+$ ls
+.              1 1 1024
+..             1 1 1024
+README         2 2 2441
+cat            2 3 35376
+echo           2 4 34312
+...
+console        3 25 0
+\end{lstlisting}
+
+Each line printed by xv6 \texttt{ls} contains the name, type, inode number, and size in bytes.
+
+A new directory \texttt{a} was then inspected:
+\begin{lstlisting}
+$ ls a
+.              1 26 32
+..             1 1 1024
+\end{lstlisting}
+
+The directory-entry structure and the maximum stored name length were inspected in \texttt{kernel/fs.h}:
+\begin{lstlisting}
+struct dirent {
+  ushort inum;
+  char name[DIRSIZ] __attribute__((nonstring));
+};
+
+#define DIRSIZ 14
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item Type \texttt{1} means directory (\texttt{T\_DIR}), type \texttt{2} means regular file (\texttt{T\_FILE}), and type \texttt{3} means device (\texttt{T\_DEVICE}).
+\item The root directory has inode number \textbf{1}. In the root directory, both \texttt{.} and \texttt{..} have inode 1 because \texttt{.} refers to the current directory and the root has no parent above itself, so its \texttt{..} also points back to root.
+\item An empty directory \texttt{a} has size 32 bytes and contains exactly two entries: \texttt{.} and \texttt{..}. A \texttt{struct dirent} contains a 2-byte \texttt{ushort inum} and a 14-byte name, so one directory entry occupies \textbf{16 bytes}. Two entries therefore occupy \textbf{32 bytes}.
+\end{enumerate}
+
+\section{Part 2. The \texttt{mystat} Program}
+
+The program \texttt{user/mystat.c} was implemented using the xv6 \texttt{stat()} call and \texttt{struct stat}. It converts numeric types to readable names and prints the inode number, link count, and size.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
+
+char *
+typename(int t)
+{
+    if(t == T_DIR)
+        return "directory";
+    if(t == T_FILE)
+        return "file";
+    if(t == T_DEVICE)
+        return "device";
+    return "?";
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct stat st;
+
+    for(int i = 1; i < argc; i++){
+        if(stat(argv[i], &st) < 0){
+            fprintf(2, "mystat: cannot stat %s\n", argv[i]);
+            continue;
+        }
+
+        printf("%s: %s, inode %d, links %d, size %ld bytes\n",
+               argv[i], typename(st.type), st.ino, st.nlink,
+               (long)st.size);
+    }
+
+    exit(0);
+}
+\end{lstlisting}
+
+The program was added to the Makefile and successfully built. It was first tested on a file, a directory, and a device:
+\begin{lstlisting}
+$ mystat README . console
+README: file, inode 2, links 1, size 2441 bytes
+.: directory, inode 1, links 1, size 1024 bytes
+console: device, inode 26, links 1, size 0 bytes
+\end{lstlisting}
+
+A hard link was then created:
+\begin{lstlisting}
+$ ln README r2
+$ mystat README r2
+README: file, inode 2, links 2, size 2441 bytes
+r2: file, inode 2, links 2, size 2441 bytes
+\end{lstlisting}
+
+After removing the original name, the second name continued to access the same inode:
+\begin{lstlisting}
+$ rm README
+$ mystat r2
+r2: file, inode 2, links 1, size 2441 bytes
+\end{lstlisting}
+
+The unlink implementation was inspected in \texttt{kernel/sysfile.c}. The relevant part is:
+\begin{lstlisting}[language=C]
+if (ip->type == T_DIR) {
+    dp->nlink--;
+    iupdate(dp);
+}
+...
+ip->nlink--;
+iupdate(ip);
+iunlockput(ip);
+\end{lstlisting}
+
+The on-disk inode structure was inspected in \texttt{kernel/fs.h}:
+\begin{lstlisting}[language=C]
+struct dinode {
+  short type;
+  short major;
+  short minor;
+  short nlink;
+  uint size;
+  uint addrs[NDIRECT + 1];
+};
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item After \texttt{ln README r2}, both names had the same inode number \textbf{2}, the same size \textbf{2441 bytes}, and their link count became \textbf{2}. After \texttt{rm README}, \texttt{r2} still referred to inode 2 with the same size, while the link count decreased to \textbf{1}. Thus, the name changed, but the inode and data did not.
+\item In \texttt{sys\_unlink}, the link count of the file inode is decremented by \texttt{ip->nlink--}. The file's blocks are not freed merely because one name is removed; they can be reclaimed only when the inode no longer has directory links and its final in-memory reference is released.
+\item The xv6 on-disk inode contains the fields \texttt{type}, \texttt{major}, \texttt{minor}, \texttt{nlink}, \texttt{size}, and \texttt{addrs[NDIRECT + 1]}. Unlike the Linux experiment from Lab 5, the xv6 inode used here does not contain Unix permission bits, and this xv6 version has no symbolic-link type in \texttt{kernel/stat.h}.
+\end{enumerate}
+
+\section{Part 3. Measuring File-System Limits}
+
+The constants controlling the basic file-system limits were read from \texttt{kernel/fs.h}:
+\begin{lstlisting}
+$ grep -n "define BSIZE\|define NDIRECT\|define NINDIRECT\|define DIRSIZ" kernel/fs.h
+5:#define BSIZE   1024 // block size
+26:#define NDIRECT   12
+27:#define NINDIRECT (BSIZE / sizeof(uint))
+54:#define DIRSIZ 14
+\end{lstlisting}
+
+A clean file-system image produced the following layout information:
+\begin{lstlisting}
+$ make clean
+$ make fs.img 2>&1 | grep nmeta
+nmeta 47 (boot, super, log blocks 31, inode blocks 13,
+bitmap blocks 1) blocks 1953 total 2000
+\end{lstlisting}
+
+The name-length limit was measured in xv6:
+\begin{lstlisting}
+$ mkdir averyveryverylongname
+$ ls
+...
+averyveryveryl 1 28 32
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The requested name \texttt{averyveryverylongname} appears as \texttt{averyveryveryl}. The stored name is limited to \textbf{14 characters} by \texttt{DIRSIZ = 14}.
+\item A file inode has 12 direct block addresses and one indirect block. With \texttt{BSIZE = 1024} bytes and a 4-byte \texttt{uint}, the indirect block can contain
+\[
+\mathrm{NINDIRECT} = \frac{1024}{4} = 256
+\]
+block addresses. Therefore the largest file is
+\[
+(12 + 256) \times 1024 = 274432 \text{ bytes} = 268 \text{ KiB}.
+\]
+\item The complete file-system image contains \textbf{2000 blocks}. The build reports \textbf{47 metadata blocks}: 1 boot block, 1 superblock, 31 log blocks, 13 inode blocks, and 1 bitmap block. The remaining \textbf{1953 blocks} are data blocks.
+\end{enumerate}
+
+\section{Part 4. The Recursive \texttt{find} Program}
+
+The second user program, \texttt{user/find.c}, recursively walks a directory tree. It opens the requested directory, reads one \texttt{struct dirent} at a time, skips unused entries and \texttt{.}/\texttt{..}, builds each full path, compares the last component with the requested name, and recursively descends into subdirectories.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "kernel/fs.h"
+#include "user/user.h"
+#include "kernel/fcntl.h"
+
+void
+find(char *path, char *target)
+{
+    char buf[512], *p;
+    int fd;
+    struct dirent de;
+    struct stat st;
+
+    if((fd = open(path, O_RDONLY)) < 0){
+        fprintf(2, "find: cannot open %s\n", path);
+        return;
+    }
+
+    if(fstat(fd, &st) < 0){
+        fprintf(2, "find: cannot stat %s\n", path);
+        close(fd);
+        return;
+    }
+
+    if(st.type != T_DIR){
+        close(fd);
+        return;
+    }
+
+    if(strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)){
+        fprintf(2, "find: path too long\n");
+        close(fd);
+        return;
+    }
+
+    strcpy(buf, path);
+    p = buf + strlen(buf);
+    if(p > buf && p[-1] != '/')
+        *p++ = '/';
+
+    while(read(fd, &de, sizeof(de)) == sizeof(de)){
+        if(de.inum == 0)
+            continue;
+
+        char name[DIRSIZ + 1];
+        memmove(name, de.name, DIRSIZ);
+        name[DIRSIZ] = 0;
+
+        if(strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+
+        memmove(p, de.name, DIRSIZ);
+        p[DIRSIZ] = 0;
+
+        if(stat(buf, &st) < 0)
+            continue;
+
+        if(strcmp(name, target) == 0)
+            printf("%s\n", buf);
+
+        if(st.type == T_DIR)
+            find(buf, target);
+    }
+
+    close(fd);
+}
+\end{lstlisting}
+
+The Makefile was updated with both new programs:
+\begin{lstlisting}
+$U/_mystat\
+$U/_find\
+\end{lstlisting}
+
+A clean build successfully compiled \texttt{user/find.c} and produced \texttt{user/\_find}. The required recursive test was then performed:
+\begin{lstlisting}
+$ mkdir a
+$ mkdir a/b
+$ echo x > a/b/r2
+$ echo y > a/r2
+$ ln cat r2
+$ find . r2
+./a/b/r2
+./a/r2
+./r2
+\end{lstlisting}
+
+A second test searched for the directory named \texttt{b} below \texttt{a}:
+\begin{lstlisting}
+$ find a b
+a/b
+\end{lstlisting}
+
+\subsection{Observations}
+The output confirms that \texttt{find} traverses nested directories recursively and prints every matching path. The program does not recurse into \texttt{.} or \texttt{..}, preventing an infinite cycle. It also skips entries whose inode number is zero and closes each directory descriptor after use, which is important because xv6 provides only a small number of open file descriptors per process.
+
+\section{Conclusion}
+This laboratory work demonstrated how the xv6 file system implements familiar Unix concepts using a small and readable code base. Directory listings exposed the direct relationship between names, inode numbers, file types, and sizes. The \texttt{mystat} experiment showed that hard links are multiple directory names for the same inode and that unlinking one name only decreases the inode's link count.
+
+The file-system constants revealed xv6's deliberate limits: 14-character directory names, 1024-byte blocks, 12 direct blocks, and one indirect block, giving a maximum file size of 268 KiB. The disk-image layout also showed the separation between metadata and data blocks. Finally, the recursive \texttt{find} program combined directory entries, inode metadata, system calls, path construction, and recursion into a practical file-system utility. Overall, the work connected xv6 source code directly to observable file-system behavior.
+
+\end{document}
