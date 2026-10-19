@@ -1,0 +1,270 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{titlesec}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\geometry{left=2.5cm,right=2cm,top=2cm,bottom=2cm}
+\setstretch{1.12}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.6em}{}
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  showstringspaces=false,
+  backgroundcolor=\color{gray!6},
+  rulecolor=\color{gray!45},
+  xleftmargin=0.3em,
+  xrightmargin=0.3em
+}
+\begin{document}
+
+\begin{titlepage}
+\centering
+{\large Ministerul Educației și Cercetării al Republicii Moldova\par}
+\vspace{0.4cm}
+{\large Universitatea Tehnică a Moldovei\par}
+\vspace{0.4cm}
+{\large Facultatea Calculatoare, Informatică și Microelectronică\par}
+\vspace{0.25cm}
+{\large Program: Software Engineering\par}
+\vfill
+{\Large\bfseries Operating Systems\par}
+\vspace{0.8cm}
+{\LARGE\bfseries Laboratory Work No. 8\par}
+\vspace{0.4cm}
+{\Large The Same Calls, Inside Your Own OS\par}
+\vspace{0.25cm}
+{\large Track B - xv6\par}
+\vfill
+\begin{flushright}
+\large
+Elaborated by: st. gr. FAF-241, Ermicev Sofia\\[0.4cm]
+Verified by: Patricia Reițman
+\end{flushright}
+\vfill
+{\large Chișinău - 2026\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Objective}
+The purpose of this laboratory work was to repeat the process-management operations used in Linux in the xv6 operating system and to implement bidirectional communication between two processes using pipes. The work focused on \texttt{fork()}, \texttt{exec()}, \texttt{wait()}, \texttt{pipe()}, \texttt{read()}, and \texttt{write()}.
+
+\section{Environment and Preparation}
+The laboratory was performed in the existing xv6 RISC-V source tree:
+
+\begin{lstlisting}
+cd ~/xv6-riscv
+make qemu
+\end{lstlisting}
+
+The system built and booted successfully. New user programs were added to the \texttt{UPROGS} list in the xv6 \texttt{Makefile}.
+
+The relevant entries were:
+
+\begin{lstlisting}
+$U/_run\
+$U/_pingpong\
+\end{lstlisting}
+
+\section{Part 1 - run inside xv6}
+
+\subsection{Program implementation}
+The first program repeats the same three-step model used in Linux: create a child process, replace it with another program, and wait for it to finish.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(int argc, char *argv[])
+{
+  printf("parent: my pid is %d\n", getpid());
+
+  int pid = fork();
+  if(pid < 0){
+    printf("fork failed\n");
+    exit(1);
+  }
+
+  if(pid == 0){
+    printf("child: my pid is %d\n", getpid());
+    char *args[] = { "echo", "hello", "from", "the", "child", 0 };
+    exec("echo", args);
+    printf("exec failed\n");
+    exit(1);
+  }
+
+  int status;
+  wait(&status);
+  printf("parent: child %d ended with status %d\n", pid, status);
+  exit(0);
+}
+\end{lstlisting}
+
+\subsection{Execution with echo}
+The first test used \texttt{echo} as the program executed by the child.
+
+\begin{lstlisting}
+$ run
+parent: my pid is 3
+child: my pid is 4
+hello from the child
+parent: child 4 ended with status 0
+\end{lstlisting}
+
+The parent process created a child with \texttt{fork()}. The child was then replaced by \texttt{echo} using \texttt{exec()}. After the child terminated, the parent continued after \texttt{wait()} and printed the exit status.
+
+\subsection{Execution with ls}
+The program was then changed to use:
+
+\begin{lstlisting}[language=C]
+char *args[] = { "ls", 0 };
+exec("ls", args);
+\end{lstlisting}
+
+The child successfully became \texttt{ls} and printed the xv6 root directory. The end of the run was:
+
+\begin{lstlisting}
+parent: child 4 ended with status 0
+\end{lstlisting}
+
+This confirmed that the child process kept its process identity but changed the program that it was executing.
+
+\subsection{Failed exec}
+Finally, the code intentionally attempted to execute a program that did not exist:
+
+\begin{lstlisting}[language=C]
+exec("nosuchprog", args);
+\end{lstlisting}
+
+The result was:
+
+\begin{lstlisting}
+$ run
+parent: my pid is 3
+child: my pid is 4
+exec failed
+parent: child 4 ended with status 1
+\end{lstlisting}
+
+The message \texttt{exec failed} was printed because \texttt{exec()} returned instead of replacing the process. The next statement, \texttt{exit(1)}, set the child's exit status to 1.
+
+\subsection{Observe answers}
+\textbf{1. Calls in xv6 and Linux.}
+
+In xv6 the program uses:
+\begin{itemize}[noitemsep]
+  \item \texttt{fork()}
+  \item \texttt{exec()}
+  \item \texttt{wait()}
+\end{itemize}
+
+In Linux Lab 7 the corresponding calls were \texttt{fork()}, \texttt{execlp()}, and \texttt{waitpid()}. The overall model is the same: create a child, replace the child with another program, and wait for the child to terminate.
+
+\textbf{2. Who prints ``hello from the child''?}
+
+The line is printed by the \texttt{echo} program. After a successful \texttt{exec("echo", args)}, the original child code is replaced by \texttt{echo}.
+
+\textbf{3. Why status 1 in xv6 and 127 in Linux?}
+
+In the xv6 program the failure path ends with \texttt{exit(1)}, therefore the parent receives status 1. In the Linux Lab 7 version the failure path used \texttt{exit(127)}, therefore the parent received 127.
+
+\section{Part 2 - pingpong}
+
+\subsection{Program implementation}
+The second program uses two pipes so that the parent and child can send a byte in both directions.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(int argc, char *argv[])
+{
+  int p2c[2], c2p[2];
+  char b = 'x';
+
+  pipe(p2c);
+  pipe(c2p);
+
+  if(fork() == 0){
+    close(p2c[1]);
+    close(c2p[0]);
+
+    read(p2c[0], &b, 1);
+    printf("%d: received ping\n", getpid());
+    write(c2p[1], &b, 1);
+
+    close(p2c[0]);
+    close(c2p[1]);
+    exit(0);
+  }
+
+  close(p2c[0]);
+  close(c2p[1]);
+
+  write(p2c[1], &b, 1);
+  read(c2p[0], &b, 1);
+  printf("%d: received pong\n", getpid());
+
+  close(p2c[1]);
+  close(c2p[0]);
+  wait(0);
+  exit(0);
+}
+\end{lstlisting}
+
+\subsection{Pipe directions}
+Two independent pipes were used:
+
+\begin{lstlisting}
+p2c: parent -> child
+c2p: child  -> parent
+\end{lstlisting}
+
+For each pipe, index 0 is the read end and index 1 is the write end. The child closes the ends that it does not use, and the parent does the same.
+
+\subsection{Execution}
+The program produced:
+
+\begin{lstlisting}
+$ pingpong
+4: received ping
+3: received pong
+\end{lstlisting}
+
+The child printed the ping message first. It could only do so after \texttt{read(p2c[0], \&b, 1)} received the byte sent by the parent. Then the child wrote the byte back through the second pipe, allowing the parent to continue.
+
+\subsection{Observe answers}
+\textbf{1. Why are two pipes needed?}
+
+A pipe is used as a one-direction communication channel in this program. One pipe carries data from parent to child, while the second carries data from child back to parent. This creates bidirectional communication without mixing the two directions.
+
+\textbf{2. Which call makes the parent wait for the reply?}
+
+The blocking call is:
+
+\begin{lstlisting}[language=C]
+read(c2p[0], &b, 1);
+\end{lstlisting}
+
+The parent cannot continue past this call until the child writes a byte into \texttt{c2p[1]}. Therefore the synchronization happens naturally through the blocking behavior of \texttt{read()}.
+
+\section{Conclusion}
+In this laboratory work I repeated the same basic process operations inside xv6 that were previously used on Linux. The experiments showed that the process model is conceptually the same: \texttt{fork()} creates a child, \texttt{exec()} replaces the current program, and \texttt{wait()} lets the parent collect the child's termination status.
+
+The \texttt{pingpong} exercise demonstrated inter-process communication with pipes. Two pipes were used to create communication in both directions, and blocking \texttt{read()} calls provided synchronization between the parent and child. This work connected the high-level behavior observed in Linux with the same mechanisms inside the xv6 operating system.
+
+\end{document}
