@@ -1,0 +1,338 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 7}}\\[0.5cm]
+{\Large \textbf{Three Small Programs: Processes, Redirection, a Pipe}}\\[0.35cm]
+{\large Track A: the real OS, from the outside (Linux)}
+
+\vfill
+
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to study the basic mechanisms used by a Linux shell when it starts programs, redirects output, and connects processes with a pipe. The work consists of four small C programs demonstrating process creation with \texttt{fork()}, program replacement with \texttt{exec()}, process synchronization with \texttt{waitpid()}, zombie processes, file descriptor redirection, and inter-process communication through a pipe.
+
+The experiments were performed on Ubuntu under WSL2 in the working directory \texttt{\~/os-lab7}. The installed compiler was GCC 13.3.0.
+
+\begin{lstlisting}
+$ gcc --version | head -1
+gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+
+$ pwd
+/home/sofia/os-lab7
+\end{lstlisting}
+
+\section{Part 1. fork + exec + wait}
+
+The first program reproduces the main steps a shell performs when executing a command such as \texttt{ls -l}: it creates a child process with \texttt{fork()}, replaces the child with another program using \texttt{execlp()}, and waits for the child in the parent using \texttt{waitpid()}.
+
+\subsection{Program structure}
+The essential process-control fragment was:
+
+\begin{lstlisting}[language=C]
+pid_t pid = fork();
+
+if (pid == 0) {
+    printf("child: my PID is %d, my parent is %d\n",
+           getpid(), getppid());
+    fflush(stdout);
+
+    execlp("ls", "ls", "-l", (char *)NULL);
+    perror("exec");
+    exit(127);
+}
+
+int status;
+waitpid(pid, &status, 0);
+printf("parent: child %d ended with status %d\n",
+       pid, WEXITSTATUS(status));
+\end{lstlisting}
+
+\subsection{Running \texttt{ls -l}}
+The initial execution produced:
+
+\begin{lstlisting}
+$ gcc -Wall -Wextra -o run run.c && ./run
+parent: my PID is 41031
+child: my PID is 41032, my parent is 41031
+total 24
+-rwxr-xr-x 1 sofia sofia 16400 Oct 19 14:10 run
+-rw-r--r-- 1 sofia sofia   919 Oct 19 14:09 run.c
+parent: child 41032 ended with status 0
+\end{lstlisting}
+
+The parent process had PID 41031. After \texttt{fork()}, the new child had PID 41032, and its parent PID was correctly reported as 41031. The child then became \texttt{ls -l}. The parent waited for it and received exit status 0.
+
+\subsection{Running \texttt{date}}
+The \texttt{execlp()} line was changed to:
+
+\begin{lstlisting}[language=C]
+execlp("date", "date", (char *)NULL);
+\end{lstlisting}
+
+The result was:
+
+\begin{lstlisting}
+parent: my PID is 41555
+child: my PID is 41556, my parent is 41555
+Mon Oct 19 14:11:58 EEST 2026
+parent: child 41556 ended with status 0
+\end{lstlisting}
+
+The child process was replaced by \texttt{date} while keeping its PID, and the command finished successfully with status 0.
+
+\subsection{Failed \texttt{exec}}
+The child was then asked to execute a non-existing program:
+
+\begin{lstlisting}[language=C]
+execlp("nosuchprog", "nosuchprog", (char *)NULL);
+\end{lstlisting}
+
+The result was:
+
+\begin{lstlisting}
+parent: my PID is 42078
+child: my PID is 42079, my parent is 42078
+exec: No such file or directory
+parent: child 42079 ended with status 127
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item \texttt{perror("exec")} is printed only when \texttt{execlp()} fails. A successful \texttt{exec} replaces the current process image, so execution never returns to the next line of the old program.
+\item The value printed by the child as ``my parent'' is the PID of the parent process. For example, child PID 41032 reported parent PID 41031.
+\item The parent saw exit status 0 for \texttt{ls} and \texttt{date}. For \texttt{nosuchprog}, the child executed \texttt{exit(127)}, so the parent received status 127.
+\end{enumerate}
+
+\section{Part 2. A Zombie, on Purpose}
+
+A zombie is a process that has already terminated but whose parent has not yet collected its termination status with \texttt{wait()} or \texttt{waitpid()}. To create one intentionally, the parent was made to sleep for 20 seconds before calling \texttt{waitpid()}.
+
+\begin{lstlisting}[language=C]
+int status;
+sleep(20);
+waitpid(pid, &status, 0);
+\end{lstlisting}
+
+The program was compiled and started in the background:
+
+\begin{lstlisting}
+$ gcc -Wall -Wextra -o zombie zombie.c
+$ ./zombie > /dev/null &
+$ sleep 2
+$ ps -o pid,ppid,stat,cmd
+    PID    PPID STAT CMD
+  40200   40193 Ss   -bash
+  44268   40200 S    ./zombie
+  44270   44268 Z    [ls] <defunct>
+  44271   40200 R+   ps -o pid,ppid,stat,cmd
+\end{lstlisting}
+
+The child \texttt{ls} had state \texttt{Z}, meaning zombie. It had already finished, but the parent process was still sleeping.
+
+After the 20-second delay, another process listing showed:
+
+\begin{lstlisting}
+$ ps -o pid,ppid,stat,cmd
+    PID    PPID STAT CMD
+  40200   40193 Ss   -bash
+  44456   40200 R+   ps -o pid,ppid,stat,cmd
+[1]+  Done                    ./zombie > /dev/null
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The \texttt{ls} process had \texttt{STAT = Z}. This means that the child had terminated and become a zombie while its parent had not yet collected its exit status.
+\item After 20 seconds, the \texttt{[ls] <defunct>} entry disappeared. The call \texttt{waitpid(pid, \&status, 0)} collected the child status and removed the zombie entry from the process table.
+\end{enumerate}
+
+\section{Part 3. Redirection: \texttt{ls -l > out.txt}}
+
+Linux processes normally start with three standard file descriptors: 0 for standard input, 1 for standard output, and 2 for standard error. The program manually redirected descriptor 1 to a file.
+
+The important part of the program was:
+
+\begin{lstlisting}[language=C]
+close(1);
+
+int fd = open("out.txt",
+              O_WRONLY | O_CREAT | O_TRUNC,
+              0644);
+
+fprintf(stderr, "open gave descriptor %d\n", fd);
+execlp("ls", "ls", "-l", (char *)NULL);
+\end{lstlisting}
+
+After descriptor 1 was closed, \texttt{open()} reused the smallest available file descriptor, which was 1. Therefore, the new file \texttt{out.txt} became standard output for the child process.
+
+The execution produced:
+
+\begin{lstlisting}
+$ gcc -Wall -Wextra -o redirect redirect.c && ./redirect
+open gave descriptor 1
+done: the listing is in out.txt
+\end{lstlisting}
+
+The listing itself did not appear on the screen. It was stored in \texttt{out.txt}:
+
+\begin{lstlisting}
+$ head -3 out.txt
+total 68
+-rw-r--r-- 1 sofia sofia     0 Oct 19 14:26 out.txt
+-rwxr-xr-x 1 sofia sofia 16344 Oct 19 14:26 redirect
+\end{lstlisting}
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item \texttt{open()} returned descriptor 1 because \texttt{close(1)} had made descriptor 1 free, and the kernel assigns the smallest available descriptor.
+\item \texttt{ls} itself was not modified. It continued to write to standard output, descriptor 1. However, descriptor 1 now referred to \texttt{out.txt}, so the listing was written to the file rather than the terminal.
+\item To redirect errors in the same way as shell syntax \texttt{2> err.txt}, descriptor 2 would need to be closed before the call to \texttt{open()}.
+\end{enumerate}
+
+\section{Part 4. A Pipe: \texttt{ls /etc | wc -l}}
+
+A pipe connects the output of one process to the input of another. The call \texttt{pipe(p)} creates two descriptors: \texttt{p[0]} for reading and \texttt{p[1]} for writing.
+
+The first child was configured so that its standard output became the write end of the pipe:
+
+\begin{lstlisting}[language=C]
+if (fork() == 0) {
+    close(1);
+    dup(p[1]);
+    close(p[0]);
+    close(p[1]);
+    execlp("ls", "ls", "/etc", (char *)NULL);
+    perror("exec ls");
+    exit(127);
+}
+\end{lstlisting}
+
+The second child was configured so that its standard input became the read end of the pipe:
+
+\begin{lstlisting}[language=C]
+if (fork() == 0) {
+    close(0);
+    dup(p[0]);
+    close(p[0]);
+    close(p[1]);
+    execlp("wc", "wc", "-l", (char *)NULL);
+    perror("exec wc");
+    exit(127);
+}
+\end{lstlisting}
+
+The parent closed both original pipe ends and waited for both children:
+
+\begin{lstlisting}[language=C]
+close(p[0]);
+close(p[1]);
+wait(NULL);
+wait(NULL);
+\end{lstlisting}
+
+The manually constructed pipeline gave:
+
+\begin{lstlisting}
+$ gcc -Wall -Wextra -o pipeline pipeline.c && ./pipeline
+183
+\end{lstlisting}
+
+The real shell pipeline produced the same value:
+
+\begin{lstlisting}
+$ ls /etc | wc -l
+183
+\end{lstlisting}
+
+\subsection{Broken-pipe experiment}
+The parent was modified temporarily so that it did not close its copy of the write end:
+
+\begin{lstlisting}[language=C]
+close(p[0]);
+/* close(p[1]); */
+\end{lstlisting}
+
+After recompilation, the program did not terminate and had to be stopped with \texttt{Ctrl+C}:
+
+\begin{lstlisting}
+$ gcc -Wall -Wextra -o pipeline pipeline.c
+$ ./pipeline
+^C
+\end{lstlisting}
+
+The reason is that \texttt{wc} waits for end-of-file on the pipe. EOF is generated only after every write descriptor referring to the pipe has been closed. Because the parent still kept \texttt{p[1]} open, \texttt{wc} continued to wait for possible additional input.
+
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The manually created pipeline and the shell pipeline produced the same number: 183.
+\item After the parent write end was deliberately left open, \texttt{wc} was the child process that did not terminate.
+\item \texttt{wc} was waiting for EOF. EOF could not arrive while the parent still had a write end of the pipe open.
+\end{enumerate}
+
+\section{Conclusion}
+In this laboratory work, the internal behavior of several basic shell operations was reproduced using short C programs. The \texttt{fork()} system call created child processes, \texttt{execlp()} replaced a child with another program, and \texttt{waitpid()} synchronized the parent with the child and removed zombie processes after termination.
+
+The work also demonstrated that Linux I/O is based on file descriptors. By closing descriptor 1 and opening a file in its place, standard output was redirected without modifying the \texttt{ls} program itself. Finally, a pipe was constructed manually using two child processes, descriptor duplication, and correct closing of unused pipe ends. The final experiment showed why leaving a write end open prevents the reader from receiving EOF and causes the pipeline to wait indefinitely.
+
+\end{document}
