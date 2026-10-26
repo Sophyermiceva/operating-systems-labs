@@ -1,0 +1,99 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},frame=single,
+  rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,
+  showstringspaces=false,aboveskip=0.8em,belowskip=0.5em}
+\newcommand{\figcap}[1]{\begin{center}\small\textit{#1}\end{center}\vspace{0.4em}}
+
+\begin{document}
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Departamentul Ingineria Software și Automatică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.0cm]
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 2}}\\[0.5cm]
+{\Large \textbf{Meet the OS You Will Build}}\\[0.35cm]
+{\large Track B: Build Your Own Small OS (xv6)}
+\vfill
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Done by:} & st. gr. FAF-241, Ermicev Sofia \\
+\\
+\textbf{Checked by:} & Patricia Reițman
+\end{tabular}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{Purpose of the Work}
+The purpose of this laboratory work is to build and boot xv6, use it as a small Unix-like operating system, and connect observable shell behavior with the source code in the \texttt{user/} and \texttt{kernel/} directories.
+
+\section{Part 1. Building and Booting xv6}
+The xv6 source tree was built with the RISC-V toolchain and started in QEMU. The actual boot reached the shell successfully.
+\begin{lstlisting}
+xv6 kernel is booting
+
+init: starting sh
+$
+\end{lstlisting}
+\figcap{Figure 1.1 -- Actual xv6 boot excerpt showing that the shell started successfully}
+
+The build compiled kernel and user programs, created the file-system image with \texttt{mkfs}, and linked the kernel. A linker warning about an RWX segment was observed, but the kernel booted and the shell was usable.
+
+\section{Part 2. Use xv6 as the Unix It Is}
+The xv6 image contains ordinary user programs such as \texttt{ls}, \texttt{cat}, and \texttt{echo}. Basic command execution and pipes behave similarly to Unix/Linux even though the shell is much smaller.
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item Three programs included with xv6 are \texttt{ls}, \texttt{cat}, and \texttt{echo}.
+\item For a pipeline such as \texttt{ls | grep c} to work, the OS needs processes and inter-process communication. The shell starts separate processes and connects the output of one process to the input of another through a pipe.
+\item The xv6 shell is much simpler than Bash, but basic Unix mechanisms such as program execution, standard input/output, and pipes work according to the same core model.
+\end{enumerate}
+
+\section{Part 3. Reading the Source}
+The source of \texttt{user/cat.c} and the kernel system-call implementation were inspected.
+\begin{lstlisting}
+sys_read  -> kernel/sysfile.c, line 69
+sys_write -> kernel/sysfile.c, line 83
+\end{lstlisting}
+\figcap{Figure 3.1 -- Locations of the read and write system-call handlers found in the xv6 source}
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item \texttt{user/cat.c} uses \texttt{read()} to obtain bytes from a file descriptor, \texttt{write()} to send bytes to a file descriptor, \texttt{open()} to open a file, \texttt{close()} to release a descriptor, and \texttt{exit()} to terminate the process.
+\item \texttt{sys\_read} is implemented in \texttt{kernel/sysfile.c} at line 69, and \texttt{sys\_write} starts at line 83 in the inspected tree.
+\item Code under \texttt{kernel/} runs as privileged operating-system code and manages resources. Code under \texttt{user/} consists of ordinary programs that request kernel services through system calls.
+\end{enumerate}
+
+\section{Conclusion}
+This work confirmed that xv6 is a small but real Unix-like operating system. Building and booting it exposed the complete path from source code to a running shell, while the source inspection connected user-level calls such as \texttt{read()} and \texttt{write()} with privileged kernel implementations.
+
+\end{document}

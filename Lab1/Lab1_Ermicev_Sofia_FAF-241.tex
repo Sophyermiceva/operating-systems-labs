@@ -1,0 +1,136 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},frame=single,
+  rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,
+  showstringspaces=false,aboveskip=0.8em,belowskip=0.5em}
+\newcommand{\figcap}[1]{\begin{center}\small\textit{#1}\end{center}\vspace{0.4em}}
+
+\begin{document}
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Departamentul Ingineria Software și Automatică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.0cm]
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 1}}\\[0.5cm]
+{\Large \textbf{The OS as a Resource Manager}}\\[0.35cm]
+{\large Track A: The Real OS, from the Outside (Linux)}
+\vfill
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Done by:} & st. gr. FAF-241, Ermicev Sofia \\
+\\
+\textbf{Checked by:} & Patricia Reițman
+\end{tabular}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{Purpose of the Work}
+The purpose of this laboratory work is to observe how a real operating system manages files, processes, memory, devices, and storage. The experiments were performed in Ubuntu under WSL2 on the student's own computer.
+
+\section{System Information}
+\begin{lstlisting}
+Linux DESKTOP-10DB5P6 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+17:26:07 up 2 min, 1 user, load average: 0.01, 0.00, 0.00
+\end{lstlisting}
+\figcap{Figure 1.1 -- Actual uname and uptime output from the laboratory environment}
+
+\section{Part 1. Files and Directories}
+A test file was created and its permissions were changed with \texttt{chmod}.
+\begin{lstlisting}
+total 8
+-rw-r--r-- 1 sofia sofia 24 Sep 28 17:28 note.txt
+-rw-r--r-- 1 sofia sofia 24 Sep 28 17:28 renamed.txt
+\end{lstlisting}
+\figcap{Figure 2.1 -- Actual listing of files created during the experiment}
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item The created files are owned by user \texttt{sofia} and group \texttt{sofia}.
+\item After \texttt{chmod 600 note.txt}, the mode became \texttt{-rw-------}: the owner can read and write, while group and other users have no permissions.
+\item Two directories directly under \texttt{/} are \texttt{/etc}, which stores system-wide configuration, and \texttt{/home}, which stores user home directories.
+\end{enumerate}
+
+\section{Part 2. Processes}
+A \texttt{sleep} process was started and inspected through \texttt{/proc}.
+\begin{lstlisting}
+Name:   sleep
+State:  S (sleeping)
+Pid:    665
+PPid:   287
+VmPeak:     3128 kB
+VmSize:     3128 kB
+\end{lstlisting}
+\figcap{Figure 3.1 -- Actual excerpt from /proc/665/status}
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item Process 1 had PID \texttt{1}. In this WSL2 environment it was \texttt{/sbin/init}, the init process.
+\item Approximately 29 processes were running on the idle system during the observation.
+\item The \texttt{sleep} process was in state \texttt{S (sleeping)}, meaning it was waiting and was not actively consuming CPU time.
+\end{enumerate}
+
+\section{Part 3. Memory}
+\begin{lstlisting}
+               total        used        free      shared  buff/cache   available
+Mem:            13Gi       711Mi        12Gi       3.3Mi       524Mi        12Gi
+Swap:          4.0Gi          0B       4.0Gi
+\end{lstlisting}
+\figcap{Figure 4.1 -- Actual memory and swap information reported by free}
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item The system exposed about 13 GiB of RAM, with about 12 GiB free at the time of the experiment.
+\item Swap is disk-backed space the operating system may use when physical memory is under pressure. The environment had 4.0 GiB configured and it was unused at that moment.
+\item The \texttt{sleep} process used 1080 kB of resident memory (\texttt{VmRSS}), which is small because the program performs almost no work.
+\end{enumerate}
+
+\section{Part 4. Devices and Storage}
+\begin{lstlisting}
+NAME MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+sda    8:0    0 388.4M  1 disk
+sdb    8:16   0     4G  0 disk [SWAP]
+sdc    8:32   0     1T  0 disk /mnt/wslg/distro
+                               /
+\end{lstlisting}
+\figcap{Figure 5.1 -- Actual block-device layout reported by lsblk}
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item The root filesystem \texttt{/} is mounted on \texttt{/dev/sdc}.
+\item \texttt{/dev/console} is an example of a device exposed through the filesystem; it represents the system console.
+\item The Unix idea that ``everything is a file'' means that many kernel-managed resources, including devices, are accessed through file-like interfaces.
+\end{enumerate}
+
+\section{Conclusion}
+The experiments showed the operating system managing files, processes, memory, devices, and storage. Commands such as \texttt{ls}, \texttt{ps}, \texttt{free}, \texttt{lsblk}, and the \texttt{/proc} filesystem exposed the state of these resources and demonstrated how Linux presents them through consistent interfaces.
+
+\end{document}
