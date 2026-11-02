@@ -1,0 +1,7 @@
+total 36
+-rw-r--r-- 1 sofia sofia    14 Nov  2 15:53 note.txt
+-rw-r--r-- 1 sofia sofia   348 Nov  2 15:53 openat_trace.txt
+-rw-r--r-- 1 sofia sofia     0 Nov  2 15:54 part1_output.txt
+-rw-r--r-- 1 sofia sofia  5206 Nov  2 15:54 part1_trace.txt
+-rwxr-xr-x 1 sofia sofia 16272 Nov  2 15:52 syscalls
+-rw-r--r-- 1 sofia sofia   617 Nov  2 15:51 syscalls.c

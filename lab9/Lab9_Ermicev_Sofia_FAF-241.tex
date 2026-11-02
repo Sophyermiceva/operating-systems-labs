@@ -1,0 +1,181 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\renewcommand{\lstlistingname}{Figure}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,aboveskip=0.7em,belowskip=0.7em,captionpos=b}
+\begin{document}
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+{\Large \textbf{Operating Systems}}\\[0.8cm]
+{\LARGE \textbf{Laboratory Work No. 9}}\\[0.5cm]
+{\Large \textbf{Watching System Calls with strace}}\\[0.35cm]
+{\large Track A: the real OS, from the outside (Linux)}
+\vfill
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+\tableofcontents
+\newpage
+\section{Introduction}
+The goal of this laboratory work was to observe the boundary between a Linux user-space program and the kernel using \texttt{strace}. I traced the system calls of an ordinary \texttt{ls -l} command, implemented a C program using \texttt{open()}, \texttt{write()}, \texttt{read()} and \texttt{close()}, and counted the resulting \texttt{openat()} calls.
+
+All tests were performed on Ubuntu under WSL2 as user \texttt{sofia}, in \texttt{/home/sofia/os-lab9}. The installed \texttt{strace} version was 6.8. The terminal outputs reproduced below are from the actual executions performed for this laboratory; the complete traces were also saved as text files.
+
+\begin{lstlisting}[caption={Environment check and strace version}]
+$ whoami
+sofia
+$ pwd
+/home/sofia/os-lab9
+$ strace --version
+strace -- version 6.8
+\end{lstlisting}
+
+\section{Part 1. See the Calls of a Real Command}
+I ran \texttt{ls -l} under \texttt{strace}, restricting the displayed events to \texttt{openat}, \texttt{read}, \texttt{write}, and \texttt{close}. The \texttt{-f} option also requests tracing of any child processes.
+
+\begin{lstlisting}[caption={Command used to inspect the system calls of ls}]
+$ strace -f -e trace=openat,read,write,close ls -l
+\end{lstlisting}
+
+The trace included attempts to open shared libraries, locale files, \texttt{/proc/filesystems}, and the current directory. An \texttt{ENOENT} result on a locale lookup means that a candidate path was not found; this did not stop \texttt{ls} from running. At the time of the first run, the working directory was empty.
+
+\begin{lstlisting}[caption={Selected lines from the real ls trace}]
+openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+close(3)                                = 0
+openat(AT_FDCWD, "/proc/filesystems", O_RDONLY|O_CLOEXEC) = 3
+read(3, "nodev\tsysfs\nnodev\ttmpfs\nnodev\tbd"..., 1024) = 478
+read(3, "", 1024)                       = 0
+close(3)                                = 0
+openat(AT_FDCWD, ".", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3
+close(3)                                = 0
+write(1, "total 0\n", 8)                = 8
+close(1)                                = 0
+close(2)                                = 0
++++ exited with 0 +++
+\end{lstlisting}
+
+\subsection{Observe}
+\textbf{Which system call does \texttt{ls} use to print to the screen? To which descriptor does it write?}
+
+The output was printed using \texttt{write()}. The trace contains \texttt{write(1, "total 0\\n", 8) = 8}: descriptor \texttt{1} is standard output (\texttt{stdout}), and eight bytes were written successfully. Even a simple directory listing uses many system calls for initialization and accessing files, not only for printing the result.
+
+\section{Part 2. A Program That Calls the Kernel Directly}
+I created \texttt{syscalls.c} to open \texttt{note.txt}, write \texttt{hello, kernel} followed by a newline, close the file, reopen it read-only, and read the bytes back. The program uses the file-descriptor system-call interface rather than \texttt{fprintf} or \texttt{fread} for file contents.
+
+\begin{lstlisting}[language=C,caption={Implementation of syscalls.c}]
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+
+int main(void) {
+    const char *msg = "hello, kernel\n";
+
+    int fd = open("note.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        perror("open");
+        return 1;
+    }
+
+    printf("open returned descriptor %d\n", fd);
+
+    ssize_t n = write(fd, msg, strlen(msg));
+    printf("write sent %zd bytes\n", n);
+    close(fd);
+
+    fd = open("note.txt", O_RDONLY);
+    char buf[64];
+    n = read(fd, buf, sizeof(buf) - 1);
+    buf[n] = '\0';
+
+    printf("read got %zd bytes: %s", n, buf);
+    close(fd);
+
+    return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Compilation and actual program output}]
+$ gcc -Wall -Wextra -o syscalls syscalls.c
+$ ./syscalls
+open returned descriptor 3
+write sent 14 bytes
+read got 14 bytes: hello, kernel
+$ cat note.txt
+hello, kernel
+\end{lstlisting}
+
+The file contained the expected 14 bytes, including the final newline. I then traced the program's system calls.
+
+\begin{lstlisting}[caption={Relevant events from the real syscalls trace}]
+$ strace -e trace=openat,write,read,close ./syscalls
+openat(AT_FDCWD, "note.txt", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3
+write(3, "hello, kernel\n", 14)         = 14
+close(3)                                = 0
+openat(AT_FDCWD, "note.txt", O_RDONLY)  = 3
+read(3, "hello, kernel\n", 63)          = 14
+close(3)                                = 0
++++ exited with 0 +++
+\end{lstlisting}
+
+The trace also contained library initialization and \texttt{write(1, ...)} calls corresponding to the program's \texttt{printf()} messages. The displayed file operations show that Linux used \texttt{openat()} to implement the C \texttt{open()} requests.
+
+\subsection{Observe}
+\textbf{Why did the first \texttt{openat()} for \texttt{note.txt} return descriptor 3 rather than 0, 1, or 2?}
+
+A process normally starts with the three standard descriptors already open: \texttt{0} for standard input (\texttt{stdin}), \texttt{1} for standard output (\texttt{stdout}), and \texttt{2} for standard error (\texttt{stderr}). Therefore the first free descriptor was \texttt{3}. Once it was closed, the same descriptor number could be reused for the second opening of \texttt{note.txt}.
+
+\section{Part 3. Count One Kind of Call}
+I restricted tracing to \texttt{openat}, saved the combined output, and used \texttt{grep} to count lines beginning with the system-call name. The \texttt{2>\&1} redirection matters because \texttt{strace} normally writes its trace to standard error.
+
+\begin{lstlisting}[caption={Tracing and counting openat calls}]
+$ strace -e trace=openat ./syscalls 2>&1 | tee openat_trace.txt
+openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3
+openat(AT_FDCWD, "note.txt", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3
+openat(AT_FDCWD, "note.txt", O_RDONLY)  = 3
+open returned descriptor 3
+write sent 14 bytes
+read got 14 bytes: hello, kernel
++++ exited with 0 +++
+$ grep -c '^openat(' openat_trace.txt
+4
+\end{lstlisting}
+
+Of the four observed \texttt{openat()} calls, two were for initialization files (the dynamic linker cache and the C library), and two were for \texttt{note.txt}. This shows why the number of system calls made by a program can exceed the number explicitly written in its source code.
+
+\section{Conclusion}
+This laboratory helped me understand how normal C file operations appear at the kernel interface. I observed that \texttt{ls} writes to file descriptor \texttt{1}, while my own program uses descriptor \texttt{3} to access a file. The recorded trace confirmed the 14-byte write and read, and the final experiment counted four \texttt{openat()} calls, including startup activity that was not explicitly part of the application logic. The experiment also showed how \texttt{strace} can help inspect program behavior without changing the program itself.
+\end{document}

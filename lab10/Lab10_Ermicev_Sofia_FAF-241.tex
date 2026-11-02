@@ -1,0 +1,193 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem,booktabs,tabularx,array,xcolor,listings,hyperref,titlesec}
+\hypersetup{hidelinks}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,aboveskip=.8em,belowskip=.8em}
+\begin{document}
+\begin{titlepage}\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+{\Large\textbf{Operating Systems}}\\[.8cm]
+{\LARGE\textbf{Laboratory Work No. 10}}\\[.5cm]
+{\Large\textbf{Add Your Own System Call: trace}}\\[.35cm]
+{\large Track B: build your own small OS (xv6)}
+\vfill
+\begin{flushright}\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}\end{flushright}
+\vfill {\large Chișinău -- 2026}
+\end{center}\end{titlepage}
+\tableofcontents\newpage
+\section{Introduction}
+The aim of this laboratory work is to extend the xv6 RISC-V operating system with a new system call named \texttt{trace}. Unlike Lab 9, where \texttt{strace} observed calls from outside a Linux process, this work modifies the xv6 user interface and kernel to report selected system calls. The experiment uses system call number 23 and a per-process bit mask. Work was performed in the existing \texttt{/home/sofia/xv6-riscv} tree on Ubuntu under WSL2.
+
+\section{Part 1. The Number and the User Side}
+\subsection{Registration}
+The value \texttt{SYS\_trace = 23} was added after \texttt{SYS\_sync = 22} in \texttt{kernel/syscall.h}. The user-level declaration was added to \texttt{user/user.h}, and \texttt{user/usys.pl} was extended so that the generated stub can issue the RISC-V \texttt{ecall} instruction.
+\begin{lstlisting}
+// kernel/syscall.h
+#define SYS_sync   22
+#define SYS_trace  23
+
+// user/user.h
+int sync(void);
+int trace(int);
+
+# user/usys.pl
+entry("sync");
+entry("trace");
+\end{lstlisting}
+\subsection{User program}
+A new \texttt{user/trace.c} accepts a mask and a command, calls \texttt{trace(mask)}, and replaces itself with the requested program using \texttt{exec()}. The program was added to the \texttt{UPROGS} list in the Makefile.
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
+int main(int argc, char *argv[])
+{
+  if(argc < 3){
+    fprintf(2, "usage: trace mask command [args...]\n");
+    exit(1);
+  }
+  if(trace(atoi(argv[1])) < 0){
+    fprintf(2, "trace: failed\n");
+    exit(1);
+  }
+  exec(argv[2], argv + 2);
+  fprintf(2, "trace: exec %s failed\n", argv[2]);
+  exit(1);
+}
+\end{lstlisting}
+\subsection{Check 1: Unimplemented kernel call}
+Before implementing the handler, xv6 booted and produced the following output.
+\begin{lstlisting}
+$ trace 32 grep hello README
+3 trace: unknown sys call 23
+trace: failed
+\end{lstlisting}
+This was the intended intermediate result: the user program issued system call 23, but the kernel had no registered handler yet.
+
+\section{Part 2. The Kernel Side}
+\subsection{Process mask and handler}
+The \texttt{trace\_mask} field was added after the process name in \texttt{struct proc} (\texttt{kernel/proc.h}). The handler in \texttt{kernel/sysproc.c} reads the integer argument and stores it in the current process.
+\begin{lstlisting}[language=C]
+// kernel/proc.h, inside struct proc
+char name[16];
+int trace_mask;
+
+// kernel/sysproc.c
+uint64
+sys_trace(void)
+{
+    int mask;
+    argint(0, &mask);
+    myproc()->trace_mask = mask;
+    return 0;
+}
+\end{lstlisting}
+\subsection{Dispatch, output, and inheritance}
+The handler was declared and added to the dispatcher in \texttt{kernel/syscall.c}. A name table maps call numbers to readable names. After a selected system call finishes, the kernel prints its PID, name, and return value. This xv6 version uses \texttt{printk()} rather than \texttt{printf()} for kernel output.
+\begin{lstlisting}[language=C]
+extern uint64 sys_trace(void);
+// In syscalls[]:
+[SYS_trace] = sys_trace,
+
+// Immediately after p->trapframe->a0 = syscalls[num]();
+if ((p->trace_mask >> num) & 1)
+    printk("%d: syscall %s -> %ld\n",
+           p->pid, syscallnames[num], p->trapframe->a0);
+
+// kernel/proc.c, in kfork(), after copying the name:
+np->trace_mask = p->trace_mask;
+\end{lstlisting}
+The inheritance line ensures that children created with \texttt{fork()} keep the parent's tracing mask.
+\subsection{Check 2: Tracing read}
+After recompiling and booting xv6, the specified command produced:
+\begin{lstlisting}
+$ trace 32 grep hello README
+3: syscall read -> 1023
+3: syscall read -> 965
+3: syscall read -> 453
+3: syscall read -> 0
+\end{lstlisting}
+The successful reads total \(1023+965+453=2441\) bytes, equal to the README size stated in the laboratory sheet. The final return value of zero indicates end of file.
+
+\section{Part 3. Playing with the Mask}
+The mask uses bit \(N\) for system call number \(N\). The experiments below were run in xv6; PIDs are taken from the terminal output.
+\subsection{All calls}
+The mask \texttt{2147483647} enables bits 0 through 30. The observed output was:
+\begin{lstlisting}
+$ trace 2147483647 grep hello README
+4: syscall trace -> 0
+4: syscall exec -> 3
+4: syscall open -> 3
+4: syscall read -> 1023
+4: syscall read -> 965
+4: syscall read -> 453
+4: syscall read -> 0
+4: syscall close -> 0
+\end{lstlisting}
+\subsection{Only fork}
+With mask 2, the \texttt{forkforkfork} test displayed fork calls from several PIDs and finished successfully. Selected lines from the actual output:
+\begin{lstlisting}
+$ trace 2 usertests forkforkfork
+usertests starting
+test forkforkfork: 5: syscall fork -> 6
+6: syscall fork -> 7
+7: syscall fork -> 8
+7: syscall fork -> 9
+...
+8: syscall fork -> 66
+8: syscall fork -> -1
+7: syscall fork -> -1
+9: syscall fork -> -1
+10: syscall fork -> -1
+OK
+ALL TESTS PASSED
+\end{lstlisting}
+The negative return values indicate unsuccessful attempts once resources were exhausted in this test.
+\subsection{Only write}
+\begin{lstlisting}
+$ trace 65536 echo hi
+hi67: syscall write -> 2
+
+67: syscall write -> 1
+\end{lstlisting}
+The \texttt{echo} program made one write of two bytes for \texttt{hi} and another of one byte for the newline. The kernel logged the first call before the second write produced the newline.
+\subsection{Only open and close}
+\begin{lstlisting}
+$ trace 2129920 grep hello README
+68: syscall open -> 3
+68: syscall close -> 0
+\end{lstlisting}
+The exact mask is \(2^{15}+2^{21}=32768+2097152=2129920\).
+
+\subsection{Observations}
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Why does mask 32 show only read?} The mask 32 equals \(2^5\), so only bit 5 is set. Since \texttt{SYS\_read} has number 5, \texttt{open} and \texttt{close} are not selected.
+\item \textbf{Why do multiple PIDs print fork lines?} The line \texttt{np->trace\_mask = p->trace\_mask;} in \texttt{kfork()} copies the mask into every child process. This was observable in the PIDs printed by the test.
+\item \textbf{Why is tracing printed between hi and the newline?} \texttt{echo} performs two \texttt{write()} calls: one for the two characters and one for the newline. The trace message is printed immediately after each call returns.
+\item \textbf{Which mask selects only open and close?} \(2^{15}+2^{21}=2129920\), as verified by the last experiment.
+\end{enumerate}
+
+\section{Conclusion}
+I extended xv6 with a user-facing system call and a kernel-side handler, connected the call number to the dispatch table, and used a per-process bitmask to control printed traces. The initial unknown-system-call result confirmed that the user-to-kernel interface was functioning; the subsequent read trace confirmed the full implementation. The fork test demonstrated why trace settings must be inherited by child processes. Overall, this exercise connected the system-call observations from Linux Lab 9 to the implementation of the same mechanism inside xv6.
+\end{document}
