@@ -1,0 +1,239 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem,booktabs,tabularx,array,xcolor,listings,hyperref,titlesec}
+\hypersetup{hidelinks}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,aboveskip=0.7em,belowskip=0.7em}
+\begin{document}
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+{\Large\textbf{Operating Systems}}\\[0.8cm]
+{\LARGE\textbf{Laboratory Work No. 11}}\\[0.5cm]
+{\Large\textbf{The Race and the Semaphore}}\\[0.35cm]
+{\large Track A: the real OS, from the outside (Linux)}
+\vfill
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+\tableofcontents
+\newpage
+\section{Introduction}
+The purpose of this laboratory work is to observe a race condition in a shared counter and then prevent it using synchronization. The experiments examine a POSIX mutex, a semaphore used as a lock, a semaphore used as a signal, and a counting semaphore controlling access to a parking lot.
+
+All programs were compiled and executed in Ubuntu under WSL2 as user \texttt{sofia}, in \texttt{/home/sofia/os-lab11}. The GCC compiler was version 13.3.0. Programs were compiled using \texttt{-Wall -pthread} without the \texttt{-O2} optimization flag. The terminal outputs below are the actual results obtained during the laboratory session and reported from the student's Ubuntu environment; they are text transcripts, not reconstructed screenshots.
+
+\section{Part 1. See the Race}
+\subsection{Program and execution}
+In \texttt{race.c}, two pthreads each increment the same global \texttt{long counter} one million times. No synchronization protects the expression \texttt{counter++}. The expected final value is 2,000,000.
+\begin{lstlisting}[language=C]
+#define N 1000000
+long counter = 0;
+void *add(void *arg) {
+    for (int i = 0; i < N; i++)
+        counter++;
+    return NULL;
+}
+\end{lstlisting}
+\noindent\textbf{Actual command output:}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o race race.c
+$ ./race
+counter = 1149718 (expected 2000000)
+$ ./race
+counter = 1142062 (expected 2000000)
+$ ./race
+counter = 1231203 (expected 2000000)
+\end{lstlisting}
+The three runs lost 850,282, 857,938, and 768,797 increments respectively.
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item A non-atomic increment can be understood as three steps: load the old value, add one, then store the new value.
+\item If both threads read the same old value before either stores its result, they can both write the same incremented value. Two attempted increments then increase the counter by only one.
+\item The result changes between runs because thread interleavings vary with scheduling and CPU timing. The program has a data race and does not guarantee a particular final value.
+\end{enumerate}
+
+\section{Part 2. Fix It: Mutex, Then Semaphore}
+\subsection{Mutex around the critical section}
+The program \texttt{mutex.c} uses \texttt{pthread\_mutex\_lock} and \texttt{pthread\_mutex\_unlock} around the increment, allowing only one thread at a time to modify the counter.
+\begin{lstlisting}[language=C]
+pthread_mutex_lock(&lock);
+counter++;
+pthread_mutex_unlock(&lock);
+\end{lstlisting}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o mutex mutex.c
+$ ./mutex
+counter = 2000000 (expected 2000000)
+$ ./mutex
+counter = 2000000 (expected 2000000)
+$ ./mutex
+counter = 2000000 (expected 2000000)
+\end{lstlisting}
+\subsection{Semaphore used as a lock}
+The program \texttt{sem.c} initializes a semaphore to 1. The \texttt{sem\_wait} and \texttt{sem\_post} calls surround the same critical section.
+\begin{lstlisting}[language=C]
+sem_init(&s, 0, 1);
+// In each thread's loop:
+sem_wait(&s);
+counter++;
+sem_post(&s);
+\end{lstlisting}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o sem sem.c
+$ ./sem
+counter = 2000000 (expected 2000000)
+$ ./sem
+counter = 2000000 (expected 2000000)
+$ ./sem
+counter = 2000000 (expected 2000000)
+\end{lstlisting}
+\subsection{Runtime comparison}
+The \texttt{time} command was used to compare all three implementations on the student's machine.
+\begin{lstlisting}
+$ time ./race
+counter = 1192634 (expected 2000000)
+real    0m0.006s
+user    0m0.003s
+sys     0m0.001s
+
+$ time ./mutex
+counter = 2000000 (expected 2000000)
+real    0m0.043s
+user    0m0.041s
+sys     0m0.021s
+
+$ time ./sem
+counter = 2000000 (expected 2000000)
+real    0m0.073s
+user    0m0.081s
+sys     0m0.036s
+\end{lstlisting}
+The unsynchronized version was fastest in this measurement but incorrect. The synchronized versions were slower due to the overhead of acquiring and releasing synchronization primitives and waiting when necessary.
+\subsection{Semaphore initialized to 2}
+An experimental copy, \texttt{sem\_two.c}, changed the initialization to \texttt{sem\_init(\&s, 0, 2)}, allowing two threads into the critical section at once.
+\begin{lstlisting}
+$ ./sem_two
+counter = 1953598 (expected 2000000)
+$ ./sem_two
+counter = 1982492 (expected 2000000)
+$ ./sem_two
+counter = 1984174 (expected 2000000)
+\end{lstlisting}
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item Yes. Both \texttt{mutex} and \texttt{sem} produced exactly 2,000,000 on all three runs.
+\item With the semaphore initialized to 2, both threads can enter the critical section concurrently, so the data race returns. The three observed results were below 2,000,000.
+\item A locked version performs synchronization operations for every increment, which adds overhead and may cause contention or waiting. It trades speed for correctness.
+\end{enumerate}
+
+\section{Part 3. A Semaphore as a Signal}
+\subsection{Ordering the writer and reader}
+In \texttt{order.c}, thread B starts before thread A but must not read the message until A has written it. The semaphore starts at zero; A signals completion with \texttt{sem\_post}.
+\begin{lstlisting}[language=C]
+sem_init(&ready, 0, 0);
+// Reader:
+sem_wait(&ready);
+// Writer, after strcpy(message, "hello"):
+sem_post(&ready);
+\end{lstlisting}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o order order.c
+$ ./order
+B: waiting for the message...
+A: message written
+B: I read "hello"
+\end{lstlisting}
+An experimental copy initialized the semaphore to 1 instead:
+\begin{lstlisting}
+$ ./order_one
+B: waiting for the message...
+B: I read ""
+A: message written
+\end{lstlisting}
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item With initial value 1, B does not block at \texttt{sem\_wait} and reads the empty global message buffer before A writes \texttt{hello}.
+\item A semaphore initialized to zero represents an unavailable event or resource: a waiting thread cannot proceed until another thread signals it with \texttt{sem\_post}.
+\end{enumerate}
+
+\section{Part 4. A Semaphore as a Counter: Parking Lot}
+\subsection{Three places for six cars}
+In \texttt{parking.c}, six threads represent cars and a semaphore initialized to \texttt{PLACES = 3} counts free parking spaces. A mutex separately protects the \texttt{inside} counter and the corresponding print statement.
+\begin{lstlisting}[language=C]
+sem_wait(&places);
+pthread_mutex_lock(&lock);
+inside++;
+printf("car %ld enters (inside: %d)\n", id, inside);
+pthread_mutex_unlock(&lock);
+// Later, after parking:
+sem_post(&places);
+\end{lstlisting}
+\noindent\textbf{Actual terminal output:}
+\begin{lstlisting}
+$ ./parking
+car 1 enters (inside: 1)
+car 2 enters (inside: 2)
+car 3 enters (inside: 3)
+car 1 leaves (inside: 2)
+car 4 enters (inside: 3)
+car 3 leaves (inside: 2)
+car 5 enters (inside: 3)
+car 2 leaves (inside: 2)
+car 6 enters (inside: 3)
+car 4 leaves (inside: 2)
+car 5 leaves (inside: 1)
+car 6 leaves (inside: 0)
+\end{lstlisting}
+The largest observed value of \texttt{inside} was 3.
+\subsection{One parking place}
+The experimental copy \texttt{parking\_one.c} used \texttt{PLACES = 1}. Only one car entered at a time:
+\begin{lstlisting}
+$ ./parking_one
+car 1 enters (inside: 1)
+car 1 leaves (inside: 0)
+car 2 enters (inside: 1)
+car 2 leaves (inside: 0)
+car 3 enters (inside: 1)
+car 3 leaves (inside: 0)
+car 4 enters (inside: 1)
+car 4 leaves (inside: 0)
+car 5 enters (inside: 1)
+car 5 leaves (inside: 0)
+car 6 enters (inside: 1)
+car 6 leaves (inside: 0)
+\end{lstlisting}
+\subsection{Observations}
+\begin{enumerate}[label=\arabic*.]
+\item The largest \texttt{inside} value was 3. The call \texttt{sem\_wait(\&places)} ensures that a car can enter only when a unit is available; \texttt{sem\_post(\&places)} gives it back upon leaving.
+\item At \texttt{PLACES = 1}, the counting semaphore becomes a binary semaphore, allowing at most one car inside at a time and functioning as a lock for entry.
+\end{enumerate}
+
+\section{Conclusion}
+This laboratory demonstrated why unsynchronized access to shared data is unsafe: three runs of \texttt{race.c} gave three different incorrect results. A mutex and a semaphore initialized to 1 both preserved the expected counter value, at a measurable runtime cost. A semaphore initialized to 2 did not provide mutual exclusion. A semaphore initialized to 0 successfully enforced an order between writer and reader, while a semaphore initialized to 3 limited six parking threads to three simultaneous occupants. Together, these results show that the initial semaphore value determines whether it is used as a lock, a signal, or a counter.
+\end{document}
