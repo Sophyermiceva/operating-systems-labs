@@ -1,0 +1,258 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem,booktabs,tabularx,array,xcolor,listings,hyperref,titlesec}
+\hypersetup{hidelinks}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\renewcommand{\contentsname}{Contents}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,aboveskip=0.7em,belowskip=0.7em}
+\begin{document}
+\begin{titlepage}
+\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+{\Large\textbf{Operating Systems}}\\[0.8cm]
+{\LARGE\textbf{Laboratory Work No. 12}}\\[0.5cm]
+{\Large\textbf{Producer, Consumer and the Other Tools}}\\[0.35cm]
+{\large Track A: the real OS, from the outside (Linux)}
+\vfill
+\begin{flushright}
+\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026}
+\end{center}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The objective of Laboratory Work No. 12 is to investigate coordination between concurrent threads using POSIX semaphores, mutexes, and condition variables. Four experiments are performed: a bounded producer--consumer buffer, message ordering through a condition variable, a readers--writers synchronization scheme, and a deliberate deadlock followed by its correction.
+
+The programs were compiled and executed in Ubuntu under WSL2 in \texttt{/home/sofia/os-lab12} using GCC 13.3.0. Each program was compiled with \texttt{gcc -Wall -pthread}. The terminal excerpts in this report are the student's actual results as supplied during the laboratory work, not simulated screenshots. The submission includes four final C programs and three experimental variants.
+
+\section{Part 1. Producer and Consumer}
+\subsection{Implementation}
+The shared circular buffer contains four slots (\texttt{SIZE = 4}) and transfers eight integers (\texttt{ITEMS = 8}). The semaphore \texttt{empty} begins at four, indicating the available slots; \texttt{full} begins at zero, indicating no items are ready. A mutex, \texttt{lock}, protects the buffer indices and the displayed count.
+\begin{lstlisting}[language=C]
+// Producer: reserve capacity before entering the critical section.
+sem_wait(&empty);
+pthread_mutex_lock(&lock);
+buf[in] = item;
+in = (in + 1) % SIZE;
+count++;
+pthread_mutex_unlock(&lock);
+sem_post(&full);
+
+// Consumer: wait for data before entering the critical section.
+sem_wait(&full);
+pthread_mutex_lock(&lock);
+int item = buf[out];
+out = (out + 1) % SIZE;
+count--;
+pthread_mutex_unlock(&lock);
+sem_post(&empty);
+\end{lstlisting}
+\subsection{Actual execution}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o prodcons prodcons.c
+$ ./prodcons
+put 1    (in buffer: 1)
+put 2    (in buffer: 2)
+put 3    (in buffer: 3)
+put 4    (in buffer: 4)
+            take 1   (in buffer: 3)
+put 5    (in buffer: 4)
+            take 2   (in buffer: 3)
+put 6    (in buffer: 4)
+            take 3   (in buffer: 3)
+put 7    (in buffer: 4)
+            take 4   (in buffer: 3)
+put 8    (in buffer: 4)
+            take 5   (in buffer: 3)
+            take 6   (in buffer: 2)
+            take 7   (in buffer: 1)
+            take 8   (in buffer: 0)
+\end{lstlisting}
+The producer transferred all eight items, the consumer removed items 1 through 8 in order, and the occupancy remained between zero and four.
+
+\subsection{Experiment: wrong synchronization order}
+In a separate file \texttt{prodcons\_wrong.c}, the first two calls in \texttt{producer()} were reversed:
+\begin{lstlisting}[language=C]
+pthread_mutex_lock(&lock); // WRONG: holds lock while waiting
+sem_wait(&empty);
+\end{lstlisting}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o prodcons_wrong prodcons_wrong.c
+$ timeout 5 ./prodcons_wrong
+put 1    (in buffer: 1)
+put 2    (in buffer: 2)
+put 3    (in buffer: 3)
+put 4    (in buffer: 4)
+            take 1   (in buffer: 3)
+put 5    (in buffer: 4)
+$ echo "exit code: $?"
+exit code: 124
+\end{lstlisting}
+The program timed out after five seconds. The producer held the mutex while blocked on \texttt{empty}; the consumer could not obtain that mutex to remove an item and signal \texttt{empty}. This is a deadlock.
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item \texttt{sem\_wait(\&empty)} prevents the producer from adding an item when the four-slot buffer is full. It blocks until the consumer calls \texttt{sem\_post(\&empty)}.
+\item The consumer waits initially, because \texttt{full} is initialized to zero. The waiting call is \texttt{sem\_wait(\&full)}.
+\item When the producer locks the mutex before waiting on \texttt{empty}, it may sleep while retaining the mutex. With a full buffer, the consumer requires the same mutex to free a slot, causing circular waiting. The observed command ended with status 124 due to \texttt{timeout}.
+\end{enumerate}
+
+\section{Part 2. The Condition Variable}
+\subsection{Implementation}
+The program \texttt{condvar.c} coordinates a reader and writer with a shared state variable \texttt{ready}, a mutex, and a POSIX condition variable \texttt{changed}. The writer writes \texttt{hello}, sets \texttt{ready = 1}, and signals. The reader waits while the shared state indicates that the message is unavailable.
+\begin{lstlisting}[language=C]
+// Writer holds the mutex while updating the condition.
+pthread_mutex_lock(&lock);
+strcpy(message, "hello");
+ready = 1;
+pthread_cond_signal(&changed);
+pthread_mutex_unlock(&lock);
+
+// Reader waits atomically releasing/reacquiring the mutex.
+pthread_mutex_lock(&lock);
+while (!ready)
+    pthread_cond_wait(&changed, &lock);
+printf("B: I read \"%s\"\n", message);
+pthread_mutex_unlock(&lock);
+\end{lstlisting}
+\subsection{Actual executions}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o condvar condvar.c
+$ ./condvar
+B: not ready, I sleep
+A: message written
+B: I read "hello"
+
+$ gcc -Wall -pthread -o condvar_if condvar_if.c
+$ ./condvar_if
+B: not ready, I sleep
+A: message written
+B: I read "hello"
+\end{lstlisting}
+The experimental file \texttt{condvar\_if.c} replaces \texttt{while (!ready)} with \texttt{if (!ready)}. It also completed successfully in this single observed run.
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item The ordinary integer variable \texttt{ready} stores the condition; the condition variable itself does not store the message-ready state.
+\item In this test, replacing \texttt{while} with \texttt{if} still produced the correct sequence and read \texttt{hello}.
+\item A condition wait can return spuriously, or another thread may change the shared state before the waiting thread reacquires the mutex. A \texttt{while} loop rechecks the predicate and avoids proceeding while \texttt{ready == 0}.
+\end{enumerate}
+
+\section{Part 3. Readers and Writers}
+\subsection{Implementation}
+Three reader threads and two writer threads access a shared integer. The semaphore \texttt{rlock} serializes changes to the number of active readers; \texttt{room} grants exclusive access to a writer or to the current group of readers.
+\begin{lstlisting}[language=C]
+// First reader excludes writers; last reader admits writers.
+sem_wait(&rlock);
+if (++readers == 1)
+    sem_wait(&room);
+sem_post(&rlock);
+/* reading */
+sem_wait(&rlock);
+if (--readers == 0)
+    sem_post(&room);
+sem_post(&rlock);
+\end{lstlisting}
+\subsection{Actual execution}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o readers readers.c
+$ ./readers
+writer 1 writes 10 (alone)
+reader 1 reads 10     (readers inside: 1)
+reader 2 reads 10     (readers inside: 2)
+reader 3 reads 10     (readers inside: 3)
+writer 2 writes 20 (alone)
+\end{lstlisting}
+All three reader threads were able to read the value 10 concurrently, while writers accessed the shared value without active readers.
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item The conditional actions \texttt{if (++readers == 1) sem\_wait(\&room)} and \texttt{if (--readers == 0) sem\_post(\&room)} ensure the first reader blocks writers and the last reader lets them in.
+\item \texttt{rlock} protects increments, decrements, and tests of the \texttt{readers} count. Without it, concurrent updates could be lost, causing incorrect admission or release of the room.
+\item If readers continue arriving before the last current reader exits, the writer can be delayed indefinitely. This is called \emph{writer starvation}.
+\end{enumerate}
+
+\section{Part 4. Build a Deadlock, Then Remove It}
+\subsection{Original deadlock}
+The program \texttt{deadlock.c} originally had two threads with opposite lock acquisition orders. Thread one acquired A and then tried B; thread two acquired B and then tried A. One-second sleeps made the circular waiting easier to reproduce.
+\begin{lstlisting}
+$ gcc -Wall -pthread -o deadlock deadlock.c
+$ timeout 5 ./deadlock
+one: I have A, I want B
+two: I have B, I want A
+$ echo "exit code: $?"
+exit code: 124
+\end{lstlisting}
+The deadlock forms the cycle: \texttt{thread one -> mutex B -> thread two -> mutex A -> thread one}.
+
+\subsection{Experiment without sleeps: ten actual runs}
+A copy named \texttt{deadlock\_nosleep.c} removed both calls to \texttt{sleep(1)}. Each execution was bounded by \texttt{timeout 2}. The recorded exit codes were:
+\begin{center}
+\begin{tabular}{c*{10}{c}}
+\toprule
+Run & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
+\midrule
+Exit & 124 & 0 & 0 & 0 & 0 & 0 & 124 & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent In runs 1 and 7, the output showed both threads holding their first mutex and waiting for the second, followed by \texttt{exit code: 124}. Runs 2--6 and 8--10 printed both \texttt{I have both} messages and \texttt{done}, followed by \texttt{exit code: 0}. Consequently, 2 out of 10 runs timed out and 8 completed. Removing the sleeps did not make the unsafe acquisition order correct; it made the failure intermittent.
+
+\subsection{Fixed version}
+The final \texttt{deadlock.c} makes both threads acquire mutex A before B and release B before A. In \texttt{two()}, the corrected synchronization is:
+\begin{lstlisting}[language=C]
+pthread_mutex_lock(&A);
+printf("two: I have A, I want B\n");
+sleep(1);
+pthread_mutex_lock(&B);
+printf("two: I have both\n");
+pthread_mutex_unlock(&B);
+pthread_mutex_unlock(&A);
+\end{lstlisting}
+\begin{lstlisting}
+$ gcc -Wall -pthread -o deadlock deadlock.c
+$ timeout 5 ./deadlock
+one: I have A, I want B
+one: I have both
+two: I have A, I want B
+two: I have both
+done
+$ echo "exit code: $?"
+exit code: 0
+\end{lstlisting}
+The program finished normally, confirming the correction in the observed run.
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item In the original deadlock, thread one holds A and waits for B, while thread two holds B and waits for A. The wait-for cycle is \texttt{T1 -> B -> T2 -> A -> T1}.
+\item Without the sleeps, the program did not always hang: runs 1 and 7 timed out; eight other runs completed. This is worse for debugging because the same unsafe program sometimes appears correct, depending on scheduling.
+\item Acquiring locks in the same global order (A before B) eliminates the circular-wait condition: a thread cannot hold B while requesting A, so this two-lock cycle cannot form.
+\end{enumerate}
+
+\section{Conclusions}
+The four experiments illustrate several distinct synchronization mechanisms and failure modes. Counting semaphores bounded producer--consumer occupancy to four, while a mutex protected buffer changes. A reversed wait/lock order caused a reproducible deadlock. A condition variable coordinated access to a shared message, with its predicate stored separately in \texttt{ready} and checked in a loop. The readers--writers example allowed concurrent reading but exclusive writing, with possible writer starvation under a sustained reader workload. Finally, opposite mutex orders caused deadlock in all tests with deliberate delays and in 2 of 10 executions without delays; consistent ordering prevented deadlock in the final execution. The tested files and actual outputs demonstrate both correct coordination and the consequences of synchronization mistakes.
+
+\end{document}
