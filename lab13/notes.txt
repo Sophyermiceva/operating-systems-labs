@@ -1,0 +1,19 @@
+Lab 13 — Semaphores in Your Own Kernel (xv6)
+Ermicev Sofia, FAF-241
+
+Observe 1. Without the lock, why do the letters mix? How many system calls does one line cost?
+Each of the 30 letters and the newline is written with a separate write() call, so one line needs 31 system calls. The two processes can execute between one another's writes, mixing the characters.
+
+Observe 2. With the lock every line is whole. Which two lines make one line a critical section?
+sem_down(3) before the character-writing loop and sem_up(3) after the loop. The semaphore has initial value 1, so only one process can write a line at a time.
+
+Observe 3. Why is the test in sem_down while (s->value == 0) instead of if?
+A wakeup may make multiple processes runnable, but another process may take the available semaphore unit first. The awakened process must check again and sleep if the value is still zero.
+
+Observe 4. Why does sem_down release the spinlock before sleep()?
+If the waiting process slept while holding the spinlock, sem_up could not acquire that same lock to increment the value and wake sleepers. This would cause a deadlock.
+
+Actual checks:
+Part 1: unknown sys call 24/25/26 before kernel handlers were installed.
+Part 2: semtest displayed parent before child, ping/pong alternation, and semtest: OK.
+Part 3: mix produced interleaved characters; mix lock produced five intact A lines and five intact b lines.

@@ -1,0 +1,190 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[a4paper,left=2.5cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{enumitem,booktabs,array,xcolor,listings,hyperref,titlesec}
+\hypersetup{hidelinks}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.5em}{}
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\definecolor{codebg}{RGB}{246,246,246}
+\definecolor{codeframe}{RGB}{215,215,215}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,aboveskip=0.7em,belowskip=0.7em}
+\begin{document}
+\begin{titlepage}\begin{center}
+{\large Ministerul Educației și Cercetării al Republicii Moldova}\\[0.3cm]
+{\large Universitatea Tehnică a Moldovei}\\[0.3cm]
+{\large Facultatea Calculatoare, Informatică și Microelectronică}\\[0.3cm]
+{\large Program: Software Engineering}\\[2.3cm]
+{\Large\textbf{Operating Systems}}\\[0.8cm]
+{\LARGE\textbf{Laboratory Work No. 13}}\\[0.5cm]
+{\Large\textbf{Semaphores in Your Own Kernel}}\\[0.35cm]
+{\large Track B: build your own small OS (xv6)}
+\vfill
+\begin{flushright}\begin{tabular}{ll}
+\textbf{Elaborated by:} & \\
+st. gr. FAF-241 & \\
+\textbf{Ermicev Sofia} & \\
+\\
+\textbf{Verified by:} & \\
+\textbf{Patricia Reițman} &
+\end{tabular}\end{flushright}
+\vfill {\large Chișinău -- 2026}
+\end{center}\end{titlepage}
+\tableofcontents\newpage
+
+\section{Introduction}
+The purpose of this laboratory work was to implement counting semaphores directly in the xv6 RISC-V kernel. In earlier Linux laboratories, the semaphore API was provided by the operating system. Here, I added the user-facing interface, three system-call handlers, and kernel synchronization based on a spinlock, sleeping, and waking up processes. The work was performed in Ubuntu under WSL2, using the existing \texttt{/home/sofia/xv6-riscv} source tree from Lab 10. The kernel was built and run using \texttt{make qemu}.
+
+\section{Part 1. The Numbers and the User Side}
+\subsection{System-call numbers and stubs}
+The new calls use consecutive numbers 24, 25, and 26. The earlier call \texttt{trace} keeps number 23. I added declarations to \texttt{user/user.h} and entries to \texttt{user/usys.pl}.
+\begin{lstlisting}[language=C]
+// kernel/syscall.h
+#define SYS_trace    23
+#define SYS_sem_init 24
+#define SYS_sem_down 25
+#define SYS_sem_up   26
+
+// user/user.h
+int sem_init(int, int);
+int sem_down(int);
+int sem_up(int);
+\end{lstlisting}
+\begin{lstlisting}
+# user/usys.pl
+entry("sem_init");
+entry("sem_down");
+entry("sem_up");
+\end{lstlisting}
+The program \texttt{user/semtest.c} was created to verify that a child waits until the parent signals, and then that two processes alternate their output. The program \texttt{user/mix.c} was created to compare unsynchronized and synchronized character output. Both programs were added to \texttt{UPROGS} in the \texttt{Makefile}.
+
+\subsection{Check 1: Before kernel handlers}
+The first boot reached the user-level programs, but xv6 had no kernel handler for calls 24, 25, or 26. The actual terminal excerpt was:
+\begin{lstlisting}[caption={Figure 1.1 -- Initial semtest output in xv6}]
+$ semtest
+3 semtest: unknown sys call 24
+4 semtest: unknown sys call 25
+child: I ran after the parent
+parent: done, I let the child go
+3 semtest: unknown sys call 26
+3 semtest: unknown sys call 24
+3 semtest: unknown sys call 24
+\end{lstlisting}
+The unrecognized calls demonstrated that the user-side stubs passed the intended system-call numbers to the kernel. The child printing before the parent showed that synchronization was not yet working. The remaining output was intermixed with additional unknown-call messages.
+
+\section{Part 2. The Kernel Side}
+\subsection{Semaphore representation}
+I created \texttt{kernel/sem.c} to implement a shared table of eight semaphores. Each entry stores a count and a spinlock, which guards updates to that count.
+\begin{lstlisting}[language=C]
+#define NSEM 8
+struct sem {
+    struct spinlock lock;
+    int value;
+};
+static struct sem sems[NSEM];
+\end{lstlisting}
+The \texttt{sys\_sem\_init} handler reads an ID and starting value, checks that the ID is between 0 and 7 and that the value is nonnegative, then assigns the count under the spinlock.
+\begin{lstlisting}[language=C]
+uint64 sys_sem_init(void)
+{
+    int id, value;
+    argint(0, &id);
+    argint(1, &value);
+    if (id < 0 || id >= NSEM || value < 0) return -1;
+    acquire(&sems[id].lock);
+    sems[id].value = value;
+    release(&sems[id].lock);
+    return 0;
+}
+\end{lstlisting}
+
+\subsection{Waiting and waking}
+The \texttt{sys\_sem\_down} handler waits while the count is zero. Crucially, it registers a sleep channel before releasing the spinlock. This order prevents a missed wakeup between checking the count and sleeping.
+\begin{lstlisting}[language=C]
+acquire(&s->lock);
+while (s->value == 0) {
+    sleep_prepare(s);
+    release(&s->lock);
+    sleep();
+    acquire(&s->lock);
+    if (killed(myproc())) {
+        release(&s->lock);
+        return -1;
+    }
+}
+s->value--;
+release(&s->lock);
+return 0;
+\end{lstlisting}
+The \texttt{sys\_sem\_up} handler increases the count and calls \texttt{wakeup(s)} to make waiting processes runnable again.
+\begin{lstlisting}[language=C]
+acquire(&s->lock);
+s->value++;
+wakeup(s);
+release(&s->lock);
+return 0;
+\end{lstlisting}
+I added \texttt{\$K/sem.o} to the Makefile kernel object list and registered \texttt{sys\_sem\_init}, \texttt{sys\_sem\_down}, and \texttt{sys\_sem\_up} in \texttt{kernel/syscall.c}. Their names were also added to the syscall name table retained from Lab 10.
+
+\subsection{Check 2: Actual semtest output}
+After rebuilding xv6, the user test produced:
+\begin{lstlisting}[caption={Figure 2.1 -- Working parent-child signaling and ping-pong}]
+$ semtest
+parent: done, I let the child go
+child: I ran after the parent
+ping 1
+ pong 1
+ping 2
+ pong 2
+ping 3
+ pong 3
+semtest: OK
+\end{lstlisting}
+This confirms that the child waits for the parent's signal despite starting earlier, and the ping and pong processes alternate correctly. There were no more \texttt{unknown sys call} messages.
+
+\section{Part 3. A Semaphore as a Lock: mix}
+\subsection{Without synchronization}
+The \texttt{mix} program forks two processes. One writes five lines of uppercase \texttt{A}, the other five lines of lowercase \texttt{b}. Each character is sent through a separate \texttt{write()} call. Without a lock, output from the two processes may interleave. In the student's first run, the actual beginning of the output was:
+\begin{lstlisting}[caption={Figure 3.1 -- Actual interleaved output without a lock}]
+$ mix
+AAAAbAAbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbAbbbbbbbbbbbbbbbbbbbbbbbbA
+AAAAAAAAAAAAAAAAAbAbAbAbAbbbbbbbA
+AAAAAbAAAAAAAAAAAAAAAAAAAAAAAAA
+AAbAbAbAbAbAAAAAAAAAAAAAAAAAAAAAbAAA
+\end{lstlisting}
+This is not a fixed or deterministic sequence; another run produced a different mixture of letters.
+
+\subsection{With semaphore lock}
+With an extra argument, \texttt{mix lock} uses semaphore 3 initialized to 1. Each process acquires it before writing a whole line and releases it afterward. A repeated, clean run produced:
+\begin{lstlisting}[caption={Figure 3.2 -- Actual intact lines with semaphore locking}]
+$ mix lock
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+\end{lstlisting}
+The lock preserves complete lines, though it does not require the processes to alternate or guarantee fairness.
+
+\subsection{Observe answers}
+\begin{enumerate}[label=\arabic*.]
+\item \textbf{Why do letters mix without the lock?} Each line has 30 letters and a newline, so it costs 31 separate \texttt{write()} system calls. The two processes can be scheduled between these calls, producing mixed letters.
+\item \textbf{Which two lines protect a whole line?} The calls \texttt{sem\_down(3)} before the character-writing loop and \texttt{sem\_up(3)} after it form a critical section. Only one process can enter that section at a time.
+\item \textbf{Why use while rather than if in sem\_down?} \texttt{wakeup(s)} can wake several waiting processes, but another process may consume the newly available unit before the awakened process reacquires the lock. Therefore each waiter must recheck whether \texttt{s->value == 0} and sleep again if necessary.
+\item \textbf{Why release the spinlock before sleep?} A sleeping process must not retain the spinlock because \texttt{sem\_up} needs that lock to increment the count and wake waiting processes. Retaining it would cause a deadlock.
+\end{enumerate}
+
+\section{Conclusion}
+In this laboratory, I built counting semaphores inside xv6 by connecting three new system-call numbers to kernel handlers. The first test showed unrecognized calls and incorrect process ordering; after implementing the handlers, \texttt{semtest} printed the parent before its child and produced strictly alternating ping and pong messages. The \texttt{mix} experiment demonstrated how a semaphore can protect a critical section even when each character is printed by an individual system call. The most important implementation detail was the correct cooperation between the spinlock and the sleep/wakeup mechanism: a process must register its wait before releasing the lock and must recheck the semaphore after waking.
+\end{document}
