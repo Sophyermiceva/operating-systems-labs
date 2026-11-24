@@ -1,0 +1,7 @@
+# Add this entry at the end of the Makefile UPROGS list:
+    $U/_uthread\
+
+# Add this custom build rule (commands MUST start with a TAB):
+$U/_uthread: $U/uthread.o $U/uthread_switch.o $(ULIB) $U/user.ld
+	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_uthread $U/uthread.o $U/uthread_switch.o $(ULIB)
+	$(OBJDUMP) -S $U/_uthread > $U/uthread.asm

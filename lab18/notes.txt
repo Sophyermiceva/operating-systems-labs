@@ -1,0 +1,12 @@
+Operating Systems - Lab 18: Build a User-Level Thread Switch
+Ermicev Sofia, FAF-241
+
+Observe: What exactly does thread_switch save and load? Why is ra the register that makes execution continue in the other thread?
+
+The thread_switch function saves the current thread's callee-saved RISC-V registers into its struct context: ra (return address), sp (stack pointer), and s0 through s11. It then restores the same 14 registers from the next thread's context. The old thread's execution state is preserved so it can continue from that point on a later switch, while sp selects the next thread's private stack. The ra register determines where execution resumes because the final ret instruction jumps to the address stored in ra. On a thread's first run, thread_create initializes ra to the thread function and sp to the top of that thread's stack. For previously suspended threads, the saved ra points back to the instruction following their earlier thread_switch call.
+
+Execution evidence:
+- `make user/_uthread` completed successfully.
+- `make qemu` booted xv6 and `uthread` started three threads.
+- Threads a, b, and c took turns printing values 0 through 99, each exiting after 100 increments.
+- After all three finished, the scheduler printed `thread_schedule: no runnable threads`, as expected by the lab sheet.

@@ -1,0 +1,209 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=2.15cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Liberation Serif}
+\setmonofont[Scale=0.89]{DejaVu Sans Mono}
+\usepackage{setspace}
+\setstretch{1.06}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{needspace}
+\hypersetup{hidelinks, pdfauthor={Ermicev Sofia}, pdftitle={Operating Systems - Laboratory Work No. 18}}
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codeframe}{RGB}{225,225,225}
+\lstdefinestyle{terminal}{
+ basicstyle=\ttfamily\footnotesize,
+ backgroundcolor=\color{codebg},
+ frame=single,rulecolor=\color{codeframe},
+ breaklines=true,columns=fullflexible,keepspaces=true,
+ showstringspaces=false,upquote=true,aboveskip=7pt,belowskip=7pt,
+ xleftmargin=2pt,xrightmargin=2pt
+}
+\lstdefinestyle{source}{
+ basicstyle=\ttfamily\footnotesize,
+ backgroundcolor=\color{codebg},frame=single,rulecolor=\color{codeframe},
+ breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,
+ numbers=left,numberstyle=\tiny\color{gray},numbersep=9pt,
+ xleftmargin=17pt,aboveskip=8pt,belowskip=8pt
+}
+\captionsetup{font=small}
+\setlength{\parindent}{1.1cm}
+\setlength{\parskip}{4pt}
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection.}{0.6em}{}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+
+\begin{document}
+\begin{titlepage}
+\centering
+\vspace*{0.55cm}
+{\large Ministerul Educației și Cercetării al Republicii Moldova\par}
+\vspace{0.2cm}
+{\large Universitatea Tehnică a Moldovei\par}
+\vspace{0.2cm}
+{\large Facultatea Calculatoare, Informatică și Microelectronică\par}
+\vspace{0.2cm}
+{\large Program: Software Engineering\par}
+\vspace{1.55cm}
+{\Large\bfseries Operating Systems\par}
+\vspace{0.65cm}
+{\LARGE\bfseries Laboratory Work No. 18\par}
+\vspace{0.35cm}
+{\Large\bfseries Build a User-Level Thread Switch\par}
+\vspace{0.20cm}
+{\large Track B: Build the OS (xv6)\par}
+\vfill
+\begin{flushright}
+\begin{minipage}{0.38\textwidth}
+\raggedright
+\textbf{Elaborated by:}\\
+st. gr. FAF-241\\
+\textbf{Ermicev Sofia}
+\vspace{0.5cm}
+
+\textbf{Verified by:}\\
+\textbf{Patricia Reițman}
+\end{minipage}
+\end{flushright}
+\vfill
+{\large Chișinău -- 2026\par}
+\end{titlepage}
+\tableofcontents
+\newpage
+
+\section{Introduction}
+The purpose of this laboratory work is to implement a simple \emph{user-level thread library} in xv6, where switching between threads occurs entirely in user space. The program saves and restores the RISC-V registers that must survive function calls, gives each thread an independent stack, and uses cooperative round-robin scheduling. No new xv6 kernel functionality is required for this exercise.
+
+The program was built in the existing \texttt{~/xv6-riscv} source tree with the RISC-V compiler and executed under QEMU. The test run presented below is the actual output recorded from the terminal.
+
+\section{Part 1. Building the Thread Switch}
+\subsection{Saved context and thread structure}
+Each thread stores a \texttt{struct context} with 14 64-bit registers: the return address \texttt{ra}, stack pointer \texttt{sp}, and \texttt{s0} through \texttt{s11}. These are the RISC-V registers that must be preserved by the called function. Each thread also has its own 8,192-byte, 16-byte-aligned stack and one of the states \texttt{FREE}, \texttt{RUNNING}, or \texttt{RUNNABLE}.
+
+\begin{lstlisting}[style=source,language=C]
+struct context {
+    uint64 ra, sp;
+    uint64 s0, s1, s2, s3, s4, s5;
+    uint64 s6, s7, s8, s9, s10, s11;
+};
+
+struct thread {
+    struct context ctx;
+    char stack[8192] __attribute__((aligned(16)));
+    int state;
+};
+\end{lstlisting}
+
+\subsection{Thread creation}
+The \texttt{thread\_create()} function finds a free slot and initializes the context of a new thread. At its first context switch, the restored \texttt{ra} points to the thread's entry function, while \texttt{sp} points to the top of its own stack.
+
+\begin{lstlisting}[style=source,language=C]
+t->state = RUNNABLE;
+t->ctx.ra = (uint64)func;
+t->ctx.sp = (uint64)(t->stack + STACK_SIZE);
+\end{lstlisting}
+
+\subsection{Cooperative round-robin scheduling}
+The function \texttt{thread\_schedule()} searches the thread array in round-robin order, starting after the current thread. When it finds a runnable thread, it marks that thread \texttt{RUNNING}, updates \texttt{current\_thread}, and invokes the context switch. A yielding thread first changes its own state back to \texttt{RUNNABLE}.
+
+\begin{lstlisting}[style=source,language=C]
+if (current_thread != next_thread) {
+    struct thread *old = current_thread;
+    next_thread->state = RUNNING;
+    current_thread = next_thread;
+    thread_switch(&old->ctx, &next_thread->ctx);
+}
+\end{lstlisting}
+
+\subsection{RISC-V context switch in Assembly}
+The \texttt{thread\_switch} procedure accepts pointers to the old and new contexts in registers \texttt{a0} and \texttt{a1}. It stores the old thread's registers using \texttt{sd} (store doubleword), reloads the next thread's registers using \texttt{ld} (load doubleword), and executes \texttt{ret}. Since each context field is eight bytes, the offset for \texttt{s11} is 104 bytes.
+
+\lstinputlisting[style=source]{uthread_switch.S}
+
+\subsection{Makefile integration}
+The existing xv6 Makefile was extended, preserving earlier laboratory programs. Its \texttt{UPROGS} list includes \texttt{\$U/\_uthread}, and the custom rule links \texttt{uthread.o}, \texttt{uthread\_switch.o}, and the standard xv6 user library.
+
+\begin{lstlisting}[style=terminal]
+$U/_uthread: $U/uthread.o $U/uthread_switch.o $(ULIB) $U/user.ld
+    $(LD) $(LDFLAGS) -T $U/user.ld -o $U/_uthread \
+      $U/uthread.o $U/uthread_switch.o $(ULIB)
+    $(OBJDUMP) -S $U/_uthread > $U/uthread.asm
+\end{lstlisting}
+
+\section{Part 2. Running the Threads}
+\subsection{Compilation and xv6 startup}
+The standalone binary was built, then the whole xv6 file-system image was generated and QEMU launched:
+
+\begin{lstlisting}[style=terminal]
+$ make user/_uthread
+riscv64-linux-gnu-gcc ... -c -o user/uthread.o user/uthread.c
+riscv64-linux-gnu-gcc -c -o user/uthread_switch.o user/uthread_switch.S
+riscv64-linux-gnu-ld ... -o user/_uthread ...
+riscv64-linux-gnu-objdump -S user/_uthread > user/uthread.asm
+
+$ make qemu
+xv6 kernel is booting
+hart 2 starting
+hart 1 starting
+init: starting sh
+$ uthread
+\end{lstlisting}
+
+The commands completed successfully; the displayed build output is abbreviated to keep the report readable.
+
+\subsection{Actual execution results}
+Three new threads announced their start. Because the functions call \texttt{thread\_yield()} explicitly, their output interleaved in a repeatable round-robin sequence:
+
+\begin{lstlisting}[style=terminal]
+thread_a started
+thread_b started
+thread_c started
+thread_c 0
+thread_a 0
+thread_b 0
+thread_c 1
+thread_a 1
+thread_b 1
+thread_c 2
+thread_a 2
+thread_b 2
+...
+thread_c 98
+thread_a 98
+thread_b 98
+thread_c 99
+thread_a 99
+thread_b 99
+thread_c: exit after 100
+thread_a: exit after 100
+thread_b: exit after 100
+thread_schedule: no runnable threads
+$
+\end{lstlisting}
+
+Each thread printed the values 0--99 and incremented its own counter 100 times. The final scheduler message appears because all three worker threads marked themselves \texttt{FREE}, leaving no runnable threads. This message matches the expected output in the assignment.
+
+\subsection{Observe: saved registers and the role of \texttt{ra}}
+\noindent\textbf{Question.} What exactly does \texttt{thread\_switch} save and load? Why is \texttt{ra} the register that makes execution continue in the other thread?
+
+\medskip
+\noindent\textbf{Answer.} \texttt{thread\_switch} saves the current thread's 14 callee-saved RISC-V registers (\texttt{ra}, \texttt{sp}, and \texttt{s0}--\texttt{s11}) into its context structure, then loads those same registers from the next thread's saved context. The restored \texttt{sp} selects the next thread's stack. The restored \texttt{ra} controls the return destination: \texttt{ret} jumps to the address stored in \texttt{ra}. On the first activation, \texttt{thread\_create} sets \texttt{ra} to the thread function, so the initial \texttt{ret} begins that function. On later activations, \texttt{ra} holds the continuation after the previous call to \texttt{thread\_switch}, so execution resumes exactly where the thread yielded.
+
+\section{Conclusion}
+This laboratory demonstrated cooperative user-level threading in xv6 without changes to the kernel. The register-saving Assembly routine, per-thread stack initialization, and round-robin scheduler allowed three threads to alternate and complete 100 iterations each. The observed execution agreed with the lab's expected output and illustrated how saving \texttt{ra} and \texttt{sp} enables control to resume in a different thread.
+
+\end{document}
